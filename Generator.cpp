@@ -392,10 +392,12 @@ public:
     };
     Opt<ClassDefinition> GetAsClassDefinition(ASTPtr Node) {
         SCOPE_TIMER
-        if (Node->Tag == TagType::CXXRecordDecl && (Node->Line.find("referenced") == std::string::npos) && (Node->Line.find("implicit") == std::string::npos)) {
+
+        if (Node->Tag == TagType::CXXRecordDecl && (Node->Line.find("implicit") == std::string::npos)) {
             
             std::smatch ClassMatch;
             if (std::regex_search(Node->Line, ClassMatch, ClassRegex)) {
+                //std::cout << "Found class " << ClassMatch[1] << std::endl;
                 return ClassDefinition{ ClassMatch[1] };
             }
         }
@@ -581,6 +583,7 @@ public:
     // Works for classes, namespaces, translation units, with special behavior handled by the specific function
     void GenerateScope(ASTPtr Node, int Indent, bool Generating) {
         SCOPE_TIMER
+
         // Assert if tag isn't a scope
         if (Node->Tag != TagType::TranslationUnitDecl && Node->Tag != TagType::NamespaceDecl && Node->Tag != TagType::ClassTemplateDecl && Node->Tag != TagType::CXXRecordDecl) {
             throw std::runtime_error("Tag is not a scope, is " + std::to_string(static_cast<int>(Node->Tag)));
