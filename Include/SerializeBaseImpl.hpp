@@ -3,7 +3,10 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
+
+#ifdef AR_SUPPORT_GLM
 #include <glm/ext.hpp>
+#endif
 
 class Serializer {
 public:
@@ -104,6 +107,7 @@ inline void DeserializeFields(Deserializer& Ser, std::string& Value) { Value = S
 inline void DeserializeFields(Deserializer& Ser, float& Value) { Value = Ser.GetCurrentScope(); }
 inline void DeserializeFields(Deserializer& Ser, double& Value) { Value = Ser.GetCurrentScope(); }
 
+#ifdef AR_SUPPORT_GLM
 inline void Serialize(Serializer& Ser, char const* Name, glm::vec2 const& Value) { Ser.AtChecked(Name) = nlohmann::json::array({ Value.x, Value.y }); }
 inline void Serialize(Serializer& Ser, char const* Name, glm::vec3 const& Value) { Ser.AtChecked(Name) = nlohmann::json::array({ Value.x, Value.y, Value.z }); }
 inline void Serialize(Serializer& Ser, char const* Name, glm::vec4 const& Value) { Ser.AtChecked(Name) = nlohmann::json::array({ Value.x, Value.y, Value.z, Value.w }); }
@@ -161,6 +165,7 @@ inline void DeserializeFields(Deserializer& Ser, glm::uvec3& Value)
 { auto const& Array = Ser.GetCurrentScope(); Value = glm::uvec3(Array[0], Array[1], Array[2]); }
 inline void DeserializeFields(Deserializer& Ser, glm::uvec4& Value)
 { auto const& Array = Ser.GetCurrentScope(); Value = glm::uvec4(Array[0], Array[1], Array[2], Array[3]); }
+#endif
 
 template<typename T>
 inline void SerializeFields(Serializer& Ser, std::vector<T> const& Value) {

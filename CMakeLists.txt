@@ -10,7 +10,7 @@ set(AR_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Include")
 add_executable(AutoReflect Generator.cpp)
 
 target_include_directories(AutoReflect PUBLIC ${PROJECT_SOURCE_DIR}/Source/)
-target_include_directories(AutoReflect PUBLIC ${PROJECT_SOURCE_DIR}/glm/)
+#target_include_directories(AutoReflect PUBLIC ${PROJECT_SOURCE_DIR}/glm/)
 target_include_directories(AutoReflect PUBLIC ${PROJECT_SOURCE_DIR}/json/include/)
 set_property(TARGET AutoReflect PROPERTY CXX_STANDARD 20)
 
