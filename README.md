@@ -22,16 +22,18 @@ Any serializable class can be passed into this function, and it will be formatte
 
 Class supporting auto serialization are defined like this:
 ```
-class Person : public AutoReflect {
-public:
-    int Age;
-    std::string Name;
-};
+namespace AutoReflect {
+    class Person {
+    public:
+        int Age;
+        std::string Name;
+    };
+}
 ```
 A reference to a `Person` can now be passed into the functions `Serialize` and `Deserialize`, which will produce or consume an `nlohmann::json`.
 ```
 void main(int argc, char** argv) {
-  Person p { {}, 45, "Robert" };
+  Person p { 45, "Robert" };
   
   Log(p); // {"Age":45,"Name":"Robert"}
 }
@@ -41,16 +43,18 @@ void main(int argc, char** argv) {
 - Nested classes and namespaces are fully supported, with one caveat listed below
 - As template are a first class feature in C++, and also work in AutoReflect!
 ```
-template<typename T>
-class Vec : public AutoReflect {
-public:
-    T x;
-    T y;
-    T z;
-};
+namespace AutoReflect {
+    template<typename T>
+    class Vec {
+    public:
+        T x;
+        T y;
+        T z;
+    };
+}
 
 void main(int argc, char** argv) {
-  Vec<int> v = { {}, 1, 2, 3 };
+  Vec<int> v = { 1, 2, 3 };
   
   Log(v); // {"x":1,"y":2,"z":3}
 }
