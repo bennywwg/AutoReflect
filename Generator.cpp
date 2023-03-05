@@ -123,7 +123,7 @@ void ClangASTLinesPiped(std::string ParsePath, T const& Func) {
 #define PCLOSE _pclose
 #endif
 
-    std::unique_ptr<FILE, decltype(&PCLOSE)> Pipe(POPEN(ClangASTCommand.c_str(), "rt"), PCLOSE);
+    std::unique_ptr<FILE, decltype(&PCLOSE)> Pipe(POPEN(ClangASTCommand.c_str(), "r"), PCLOSE);
     if (!Pipe) {
         throw std::runtime_error("popen() failed!");
     }
