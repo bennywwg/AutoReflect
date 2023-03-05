@@ -380,6 +380,8 @@ public:
 
     std::vector<std::string> Errors;
 
+    int NumAutoReflectNamespaces = 0;
+
     std::string GetFullyQualifiedName() {
         if (TemplateStack.empty() && NameStack.empty()) return "";
 
@@ -434,8 +436,8 @@ public:
             for (i = Node->Line.size() - 1; i > 0; --i) {
                 if (Node->Line[i] == ' ') break;
             }
-            
-            return NamespaceDefinition { Node->Line.substr(i) };
+
+            return NamespaceDefinition { Node->Line.substr(i + 1) };
         }
 
         return std::nullopt;
@@ -566,12 +568,12 @@ public:
         NameStack.pop_back();
         PrintTabbed("};\n", Indent);
 
-        if (FoundAutoReflect && TemplateStack.size() > 1) {
+        if ((NumAutoReflectNamespaces > 0 || FoundAutoReflect) && TemplateStack.size() > 1) {
             Errors.push_back("Nested templates are not supported");
             Generating = false;
         }
 
-        if (FoundAutoReflect && Generating) {
+        if ((NumAutoReflectNamespaces > 0 || FoundAutoReflect) && Generating) {
             if (!Templates.empty()) GeneratedSource += Templates + "\n";
             GeneratedSource += "inline void SerializeFields(Serializer& Ser, " + FullyQualified + Flattened.GenerateNames() + " const& Val) {\n";
             GeneratedSource += SerializeFieldsSource;
@@ -619,9 +621,11 @@ public:
                 GenerateClass(Child, Indent + 1, Generating);
             } else if (Opt<NamespaceDefinition> NamespaceDef = GetAsNamespaceDefinition(Child)) {
                 PrintTabbed("namespace " + NamespaceDef->LocalNamespaceName + " {\n", Indent);
+                if (NamespaceDef->LocalNamespaceName == "AutoReflect") ++NumAutoReflectNamespaces;
                 NameStack.push_back(NamespaceDef->LocalNamespaceName);
                 GenerateScope(Child, Indent + 1, Generating);
                 NameStack.pop_back();
+                if (NamespaceDef->LocalNamespaceName == "AutoReflect") --NumAutoReflectNamespaces;
                 PrintTabbed("}\n", Indent);
             }
         }
