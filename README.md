@@ -78,6 +78,6 @@ void Foo(Outer<A>::Inner<B>) { ... }
 Is not supported in C++, and therefore AutoReflect cannot do anything useful with these types of classes.
 
 ## Requirements:
-- Linux-like environment with modern C++ compiler
+- Environment with modern C++ compiler
 - [cmake](https://cmake.org/)
 - [clang](https://clang.llvm.org/)
