@@ -14,13 +14,14 @@ public:
     std::vector<uint8_t> Binary;
 
     std::vector<nlohmann::json*> Scopes;
+    std::vector<std::string> ScopeNames;
 
     inline nlohmann::json& GetCurrentScope() {
         return Scopes.empty() ? Data : *Scopes.back();
     }
     
     inline nlohmann::json& AtChecked(char const* Name) {
-        if (GetCurrentScope().find(Name) != GetCurrentScope().end()) throw std::runtime_error("Name " + std::string(Name) + " already in use\n");
+        if (GetCurrentScope().find(Name) != GetCurrentScope().end()) throw std::runtime_error("Name " + std::string(Name) + " already in use");
         return GetCurrentScope()[Name];
     }
 };
@@ -31,29 +32,48 @@ public:
     std::vector<uint8_t> Binary;
 
     std::vector<nlohmann::json*> Scopes;
+    std::vector<std::string> ScopeNames;
+
+    Deserializer() = default;
 
     inline nlohmann::json& GetCurrentScope() {
         return Scopes.empty() ? Data : *Scopes.back();
     }
     
     inline nlohmann::json& AtChecked(char const* Name) {
-        if (GetCurrentScope().find(Name) != GetCurrentScope().end()) throw std::runtime_error("Name " + std::string(Name) + " already in use\n");
+        if (GetCurrentScope().find(Name) == GetCurrentScope().end()) {
+            std::string Er = ScopeNames.empty() ? "" : ScopeNames[0];
+            for (std::string const& ScopeName : ScopeNames) {
+				Er += "::" + ScopeName;
+			}
+            throw std::runtime_error("Name " + std::string(Name) + " can't be found" + (Er.empty() ? std::string() : " in " + Er));
+
+        }
         return GetCurrentScope()[Name];
     }
 };
                                                                                               
 inline void BeginObject(Serializer& Ser, char const* Name) {
-  nlohmann::json& Scope = Ser.AtChecked(Name);
-  Ser.Scopes.push_back(&Scope);
+    nlohmann::json& Scope = Ser.AtChecked(Name);
+    Ser.Scopes.push_back(&Scope);
+    Ser.ScopeNames.push_back(Name);
 }
 
-inline void BeginObject(Deserializer& Ser, char const* Name) { }
+inline void BeginObject(Deserializer& Ser, char const* Name) {
+    nlohmann::json& Scope = Ser.AtChecked(Name);
+	Ser.Scopes.push_back(&Scope);
+	Ser.ScopeNames.push_back(Name);
+}
 
 inline void EndObject(Serializer& Ser) {
   Ser.Scopes.pop_back();
+  Ser.ScopeNames.pop_back();
 }
 
-inline void EndObject(Deserializer& Ser) { }
+inline void EndObject(Deserializer& Ser) {
+    Ser.Scopes.pop_back();
+    Ser.ScopeNames.pop_back();
+}
 
 inline void Serialize(Serializer& Ser, char const* Name, bool const& Value) { Ser.AtChecked(Name) = Value; }
 inline void Serialize(Serializer& Ser, char const* Name, uint8_t const& Value) { Ser.AtChecked(Name) = Value; }
