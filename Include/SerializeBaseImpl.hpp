@@ -1,6 +1,7 @@
 #include <string>
 #include <stdexcept>
 #include <vector>
+#include <typeinfo>
 
 #include <nlohmann/json.hpp>
 
@@ -53,79 +54,84 @@ public:
     }
 };
                                                                                               
-inline void BeginObject(Serializer& Ser, char const* Name) {
+static void BeginObject(Serializer& Ser, char const* Name) {
     nlohmann::json& Scope = Ser.AtChecked(Name);
     Ser.Scopes.push_back(&Scope);
     Ser.ScopeNames.push_back(Name);
 }
 
-inline void BeginObject(Deserializer& Ser, char const* Name) {
+static void BeginObject(Deserializer& Ser, char const* Name) {
     nlohmann::json& Scope = Ser.AtChecked(Name);
 	Ser.Scopes.push_back(&Scope);
 	Ser.ScopeNames.push_back(Name);
 }
 
-inline void EndObject(Serializer& Ser) {
+static void EndObject(Serializer& Ser) {
   Ser.Scopes.pop_back();
   Ser.ScopeNames.pop_back();
 }
 
-inline void EndObject(Deserializer& Ser) {
+static void EndObject(Deserializer& Ser) {
     Ser.Scopes.pop_back();
     Ser.ScopeNames.pop_back();
 }
 
-inline void Serialize(Serializer& Ser, char const* Name, bool const& Value) { Ser.AtChecked(Name) = Value; }
-inline void Serialize(Serializer& Ser, char const* Name, uint8_t const& Value) { Ser.AtChecked(Name) = Value; }
-inline void Serialize(Serializer& Ser, char const* Name, uint16_t const& Value) { Ser.AtChecked(Name) = Value; }
-inline void Serialize(Serializer& Ser, char const* Name, uint32_t const& Value) { Ser.AtChecked(Name) = Value; }
-inline void Serialize(Serializer& Ser, char const* Name, uint64_t const& Value) { Ser.AtChecked(Name) = Value; }
-inline void Serialize(Serializer& Ser, char const* Name, int8_t const& Value) { Ser.AtChecked(Name) = Value; }
-inline void Serialize(Serializer& Ser, char const* Name, int16_t const& Value) { Ser.AtChecked(Name) = Value; }
-inline void Serialize(Serializer& Ser, char const* Name, int32_t const& Value) { Ser.AtChecked(Name) = Value; }
-inline void Serialize(Serializer& Ser, char const* Name, int64_t const& Value) { Ser.AtChecked(Name) = Value; }
-inline void Serialize(Serializer& Ser, char const* Name, std::string const& Value) { Ser.AtChecked(Name) = Value; }
-inline void Serialize(Serializer& Ser, char const* Name, float const& Value) { Ser.AtChecked(Name) = Value; }
-inline void Serialize(Serializer& Ser, char const* Name, double const& Value) { Ser.AtChecked(Name) = Value; }
+static void Serialize(Serializer& Ser, char const* Name, std::any const& Val);
+static void Deserialize(Deserializer& Ser, char const* Name, std::any& Val);
+static void SerializeFields(Serializer& Ser, std::any const& Val);
+static void DeserializeFields(Deserializer& Ser, std::any& Val);
 
-inline void Deserialize(Deserializer& Ser, char const* Name, bool& Value) { Value = Ser.AtChecked(Name); }
-inline void Deserialize(Deserializer& Ser, char const* Name, uint8_t& Value) { Value = Ser.AtChecked(Name); }
-inline void Deserialize(Deserializer& Ser, char const* Name, uint16_t& Value) { Value = Ser.AtChecked(Name); }
-inline void Deserialize(Deserializer& Ser, char const* Name, uint32_t& Value) { Value = Ser.AtChecked(Name); }
-inline void Deserialize(Deserializer& Ser, char const* Name, uint64_t& Value) { Value = Ser.AtChecked(Name); }
-inline void Deserialize(Deserializer& Ser, char const* Name, int8_t& Value) { Value = Ser.AtChecked(Name); }
-inline void Deserialize(Deserializer& Ser, char const* Name, int16_t& Value) { Value = Ser.AtChecked(Name); }
-inline void Deserialize(Deserializer& Ser, char const* Name, int32_t& Value) { Value = Ser.AtChecked(Name); }
-inline void Deserialize(Deserializer& Ser, char const* Name, int64_t& Value) { Value = Ser.AtChecked(Name); }
-inline void Deserialize(Deserializer& Ser, char const* Name, std::string& Value) { Value = Ser.AtChecked(Name); }
-inline void Deserialize(Deserializer& Ser, char const* Name, float& Value) { Value = Ser.AtChecked(Name); }
-inline void Deserialize(Deserializer& Ser, char const* Name, double& Value) { Value = Ser.AtChecked(Name); }
+static void Serialize(Serializer& Ser, char const* Name, bool const& Value) { Ser.AtChecked(Name) = Value; }
+static void Serialize(Serializer& Ser, char const* Name, uint8_t const& Value) { Ser.AtChecked(Name) = Value; }
+static void Serialize(Serializer& Ser, char const* Name, uint16_t const& Value) { Ser.AtChecked(Name) = Value; }
+static void Serialize(Serializer& Ser, char const* Name, uint32_t const& Value) { Ser.AtChecked(Name) = Value; }
+static void Serialize(Serializer& Ser, char const* Name, uint64_t const& Value) { Ser.AtChecked(Name) = Value; }
+static void Serialize(Serializer& Ser, char const* Name, int8_t const& Value) { Ser.AtChecked(Name) = Value; }
+static void Serialize(Serializer& Ser, char const* Name, int16_t const& Value) { Ser.AtChecked(Name) = Value; }
+static void Serialize(Serializer& Ser, char const* Name, int32_t const& Value) { Ser.AtChecked(Name) = Value; }
+static void Serialize(Serializer& Ser, char const* Name, int64_t const& Value) { Ser.AtChecked(Name) = Value; }
+static void Serialize(Serializer& Ser, char const* Name, std::string const& Value) { Ser.AtChecked(Name) = Value; }
+static void Serialize(Serializer& Ser, char const* Name, float const& Value) { Ser.AtChecked(Name) = Value; }
+static void Serialize(Serializer& Ser, char const* Name, double const& Value) { Ser.AtChecked(Name) = Value; }
 
-inline void SerializeFields(Serializer& Ser, bool const& Value) { Ser.GetCurrentScope() = Value; }
-inline void SerializeFields(Serializer& Ser, uint8_t const& Value) { Ser.GetCurrentScope() = Value; }
-inline void SerializeFields(Serializer& Ser, uint16_t const& Value) { Ser.GetCurrentScope() = Value; }
-inline void SerializeFields(Serializer& Ser, uint32_t const& Value) { Ser.GetCurrentScope() = Value; }
-inline void SerializeFields(Serializer& Ser, uint64_t const& Value) { Ser.GetCurrentScope() = Value; }
-inline void SerializeFields(Serializer& Ser, int8_t const& Value) { Ser.GetCurrentScope() = Value; }
-inline void SerializeFields(Serializer& Ser, int16_t const& Value) { Ser.GetCurrentScope() = Value; }
-inline void SerializeFields(Serializer& Ser, int32_t const& Value) { Ser.GetCurrentScope() = Value; }
-inline void SerializeFields(Serializer& Ser, int64_t const& Value) { Ser.GetCurrentScope() = Value; }
-inline void SerializeFields(Serializer& Ser, std::string const& Value) { Ser.GetCurrentScope() = Value; }
-inline void SerializeFields(Serializer& Ser, float const& Value) { Ser.GetCurrentScope() = Value; }
-inline void SerializeFields(Serializer& Ser, double const& Value) { Ser.GetCurrentScope() = Value; }
+static void Deserialize(Deserializer& Ser, char const* Name, bool& Value) { Value = Ser.AtChecked(Name); }
+static void Deserialize(Deserializer& Ser, char const* Name, uint8_t& Value) { Value = Ser.AtChecked(Name); }
+static void Deserialize(Deserializer& Ser, char const* Name, uint16_t& Value) { Value = Ser.AtChecked(Name); }
+static void Deserialize(Deserializer& Ser, char const* Name, uint32_t& Value) { Value = Ser.AtChecked(Name); }
+static void Deserialize(Deserializer& Ser, char const* Name, uint64_t& Value) { Value = Ser.AtChecked(Name); }
+static void Deserialize(Deserializer& Ser, char const* Name, int8_t& Value) { Value = Ser.AtChecked(Name); }
+static void Deserialize(Deserializer& Ser, char const* Name, int16_t& Value) { Value = Ser.AtChecked(Name); }
+static void Deserialize(Deserializer& Ser, char const* Name, int32_t& Value) { Value = Ser.AtChecked(Name); }
+static void Deserialize(Deserializer& Ser, char const* Name, int64_t& Value) { Value = Ser.AtChecked(Name); }
+static void Deserialize(Deserializer& Ser, char const* Name, std::string& Value) { Value = Ser.AtChecked(Name); }
+static void Deserialize(Deserializer& Ser, char const* Name, float& Value) { Value = Ser.AtChecked(Name); }
+static void Deserialize(Deserializer& Ser, char const* Name, double& Value) { Value = Ser.AtChecked(Name); }
 
-inline void DeserializeFields(Deserializer& Ser, bool& Value) { Value = Ser.GetCurrentScope(); }
-inline void DeserializeFields(Deserializer& Ser, uint8_t& Value) { Value = Ser.GetCurrentScope(); }
-inline void DeserializeFields(Deserializer& Ser, uint16_t& Value) { Value = Ser.GetCurrentScope(); }
-inline void DeserializeFields(Deserializer& Ser, uint32_t& Value) { Value = Ser.GetCurrentScope(); }
-inline void DeserializeFields(Deserializer& Ser, uint64_t& Value) { Value = Ser.GetCurrentScope(); }
-inline void DeserializeFields(Deserializer& Ser, int8_t& Value) { Value = Ser.GetCurrentScope(); }
-inline void DeserializeFields(Deserializer& Ser, int16_t& Value) { Value = Ser.GetCurrentScope(); }
-inline void DeserializeFields(Deserializer& Ser, int32_t& Value) { Value = Ser.GetCurrentScope(); }
-inline void DeserializeFields(Deserializer& Ser, int64_t& Value) { Value = Ser.GetCurrentScope(); }
-inline void DeserializeFields(Deserializer& Ser, std::string& Value) { Value = Ser.GetCurrentScope(); }
-inline void DeserializeFields(Deserializer& Ser, float& Value) { Value = Ser.GetCurrentScope(); }
-inline void DeserializeFields(Deserializer& Ser, double& Value) { Value = Ser.GetCurrentScope(); }
+static void SerializeFields(Serializer& Ser, bool const& Value) { Ser.GetCurrentScope() = Value; }
+static void SerializeFields(Serializer& Ser, uint8_t const& Value) { Ser.GetCurrentScope() = Value; }
+static void SerializeFields(Serializer& Ser, uint16_t const& Value) { Ser.GetCurrentScope() = Value; }
+static void SerializeFields(Serializer& Ser, uint32_t const& Value) { Ser.GetCurrentScope() = Value; }
+static void SerializeFields(Serializer& Ser, uint64_t const& Value) { Ser.GetCurrentScope() = Value; }
+static void SerializeFields(Serializer& Ser, int8_t const& Value) { Ser.GetCurrentScope() = Value; }
+static void SerializeFields(Serializer& Ser, int16_t const& Value) { Ser.GetCurrentScope() = Value; }
+static void SerializeFields(Serializer& Ser, int32_t const& Value) { Ser.GetCurrentScope() = Value; }
+static void SerializeFields(Serializer& Ser, int64_t const& Value) { Ser.GetCurrentScope() = Value; }
+static void SerializeFields(Serializer& Ser, std::string const& Value) { Ser.GetCurrentScope() = Value; }
+static void SerializeFields(Serializer& Ser, float const& Value) { Ser.GetCurrentScope() = Value; }
+static void SerializeFields(Serializer& Ser, double const& Value) { Ser.GetCurrentScope() = Value; }
+
+static void DeserializeFields(Deserializer& Ser, bool& Value) { Value = Ser.GetCurrentScope(); }
+static void DeserializeFields(Deserializer& Ser, uint8_t& Value) { Value = Ser.GetCurrentScope(); }
+static void DeserializeFields(Deserializer& Ser, uint16_t& Value) { Value = Ser.GetCurrentScope(); }
+static void DeserializeFields(Deserializer& Ser, uint32_t& Value) { Value = Ser.GetCurrentScope(); }
+static void DeserializeFields(Deserializer& Ser, uint64_t& Value) { Value = Ser.GetCurrentScope(); }
+static void DeserializeFields(Deserializer& Ser, int8_t& Value) { Value = Ser.GetCurrentScope(); }
+static void DeserializeFields(Deserializer& Ser, int16_t& Value) { Value = Ser.GetCurrentScope(); }
+static void DeserializeFields(Deserializer& Ser, int32_t& Value) { Value = Ser.GetCurrentScope(); }
+static void DeserializeFields(Deserializer& Ser, int64_t& Value) { Value = Ser.GetCurrentScope(); }
+static void DeserializeFields(Deserializer& Ser, std::string& Value) { Value = Ser.GetCurrentScope(); }
+static void DeserializeFields(Deserializer& Ser, float& Value) { Value = Ser.GetCurrentScope(); }
+static void DeserializeFields(Deserializer& Ser, double& Value) { Value = Ser.GetCurrentScope(); }
 
 #ifdef AR_SUPPORT_GLM
 inline void Serialize(Serializer& Ser, char const* Name, glm::vec2 const& Value) { Ser.AtChecked(Name) = nlohmann::json::array({ Value.x, Value.y }); }
@@ -208,6 +214,25 @@ inline void Serialize(Serializer& Ser, char const* Name, std::vector<T> const& V
 }
 
 template<typename T>
+inline void DeserializeFields(Deserializer& Ser, std::vector<T>& Value) {
+    auto& Scope = Ser.GetCurrentScope();
+
+    for (auto& Item : Scope) {
+        Value.push_back(T());
+        Ser.Scopes.push_back(&Item);
+        DeserializeFields(Ser, Value.back());
+        Ser.Scopes.pop_back();
+    }
+}
+
+template<typename T>
+inline void Deserialize(Deserializer& Ser, char const* Name, std::vector<T>& Value) {
+    BeginObject(Ser, Name);
+    DeserializeFields(Ser, Value);
+    EndObject(Ser);
+}
+
+template<typename T>
 inline void SerializeFields(Serializer& Ser, std::optional<T> const& Value) {
     if (Value.has_value()) {
         SerializeFields(Ser, Value.value());
@@ -222,5 +247,3 @@ inline void Serialize(Serializer& Ser, char const* Name, std::optional<T> const&
     SerializeFields(Ser, Value);
     EndObject(Ser);
 }
-
-inline void Deserialize(Serializer& Ser, char const* Name, int const& Value) { }

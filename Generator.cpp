@@ -1,19 +1,61 @@
 #include <string>
 #include <vector>
-#include <regex>
-#include <fstream>
-#include <iostream>
+#include <map>
+#include <set>
 #include <memory>
 #include <optional>
 #include <variant>
+
+#include <regex>
+#include <fstream>
+#include <iostream>
 #include <filesystem>
-#include <chrono>
-#include <map>
 #include <sstream>
+
+#include <chrono>
 #include <functional>
+#include <thread>
+
+#ifndef _WIN32 
+#define POPEN popen
+#define PCLOSE pclose
+#else
+#define POPEN _popen
+#define PCLOSE _pclose
+#endif
 
 const std::regex ClassRegex("class ([a-zA-Z0-9_]+) definition");
 const std::regex FieldRegex("([a-zA-Z0-9_]+) '([a-zA-Z0-9_:<>, \\*\\&\\[\\]]+)'");
+
+std::mutex Mutex;
+
+void Log(std::filesystem::path const& Task, std::string const& Str) {
+    std::lock_guard<std::mutex> Lock(Mutex);
+    std::cout << "AutoReflect " << Task << ": " << Str << std::endl;
+}
+
+struct CallOnDtor {
+    std::function<void()> Func;
+    CallOnDtor(std::function<void()> Func)
+    : Func(Func)
+    {}
+    ~CallOnDtor() {
+        Func();
+    }
+};
+
+template<typename F, typename T>
+void ParallelFor(F Func, std::vector<T> const& Inputs) {
+    std::vector<std::thread> Threads;
+    for (auto const& Input : Inputs) {
+        Threads.emplace_back([Input, Func](){
+            Func(Input);
+        });
+    }
+    for (auto& Thread : Threads) {
+        Thread.join();
+    }
+}
 
 std::vector<std::string> SplitForTemplate(std::string const& Val) {
     std::vector<std::string> result;
@@ -46,12 +88,13 @@ bool GetTemplateParams(std::string const& Line, std::string& Type, std::string& 
     return true;
 }
 
-std::map<int, std::chrono::high_resolution_clock::duration> Times;
+//std::map<int, std::chrono::high_resolution_clock::duration> Times;
 
-struct ScopeTimer;
+//struct ScopeTimer;
 
-std::vector<ScopeTimer*> TimerStack;
+//std::vector<ScopeTimer*> TimerStack;
 
+/*
 struct ScopeTimer {
     std::chrono::high_resolution_clock::time_point Begin;
     const int Line;
@@ -83,7 +126,7 @@ struct ScopeTimer {
     void Resume() {
         Begin = std::chrono::high_resolution_clock::now();
     }
-};
+};*/
 
 //#define SCOPE_TIMER ScopeTimer T##__LINE__(__LINE__);
 #define SCOPE_TIMER
@@ -100,28 +143,31 @@ template<typename T>
 using Opt = std::optional<T>;
 
 template<typename T>
-void ClangASTLinesPiped(std::string ParsePath, T const& Func) {
-
+void ClangASTLinesPiped(std::string ParsePath, std::vector<std::filesystem::path> const& Includes, T const& Func, bool Silent) {
     std::string ClangASTCommand
 #ifdef _WIN32
     = "cmd /c \"clang -std=c++20 -Xclang -ast-dump -fsyntax-only -fno-color-diagnostics -I"
-    + std::string(AR_INCLUDE_DIR) + " " + ParsePath
+    + std::string(AR_INCLUDE_DIR);
+    
+    for (auto const& Include : Includes) {
+        ClangASTCommand += " -I\"" + Include.string() + "\"";
+    }
+    
+    ClangASTCommand += " " + ParsePath
     + " 2>NUL\"";
 #else
     = "clang -std=c++20 -Xclang -ast-dump -fsyntax-only -fno-color-diagnostics -I"
-    + std::string(AR_INCLUDE_DIR) + " " + ParsePath
+    + std::string(AR_INCLUDE_DIR);
+    
+    for (auto const& Include : Includes) {
+        ClangASTCommand += " -I\"" + Include.string() + "\"";
+    }
+
+    ClangASTCommand += " " + ParsePath
     + " 2>/dev/null";
 #endif
 
-    std::cout << "Clang command: " << ClangASTCommand << std::endl;
-
-#ifndef _WIN32 
-#define POPEN popen
-#define PCLOSE pclose
-#else
-#define POPEN _popen
-#define PCLOSE _pclose
-#endif
+    if (!Silent) Log(ParsePath, "Clang command: " + ClangASTCommand);
 
     std::unique_ptr<FILE, decltype(&PCLOSE)> Pipe(POPEN(ClangASTCommand.c_str(), "r"), PCLOSE);
     if (!Pipe) {
@@ -140,68 +186,64 @@ void ClangASTLinesPiped(std::string ParsePath, T const& Func) {
     delete[] LineData;
 }
 
-/*
-template<typename T, size_t N>
-void ClangASTLinesCached(std::string ParsePath, T const& Func) {
-    {
-        std::string ClangASTCommand = "clang -std=c++20 -Xclang -ast-dump -fsyntax-only -fno-color-diagnostics " + ParsePath + "> cast_cache.txt 2>/dev/null";
+std::vector<std::string> GetAllHeaders(std::filesystem::path const& Path, std::vector<std::filesystem::path> const& Includes, bool Silent) {
+    std::string GetHeadersCommand
+#ifdef _WIN32
+    = "cmd /c \"clang -std=c++20 -M";
     
-        std::unique_ptr<FILE, decltype(&pclose)> Pipe(popen(ClangASTCommand.c_str(), "r"), pclose);
-        if (!Pipe) {
-            throw std::runtime_error("popen() failed!");
+    for (auto const& Include : Includes) {
+        GetHeadersCommand += " -I\"" + Include.string() + "\"";
+    }
+    
+    ClangASTCommand += " " + Path.string()
+    + " 2>NUL\"";
+#else
+    = "clang -std=c++20 -M";
+    
+    for (auto const& Include : Includes) {
+        GetHeadersCommand += " -I\"" + Include.string() + "\"";
+    }
+
+    GetHeadersCommand += " " + Path.string()
+    + " 2>/dev/null";
+#endif
+
+    if (!Silent) Log(Path, "Clang command: " + GetHeadersCommand);
+
+    std::unique_ptr<FILE, decltype(&PCLOSE)> Pipe(POPEN(GetHeadersCommand.c_str(), "r"), PCLOSE);
+    if (!Pipe) {
+        throw std::runtime_error("popen() failed!");
+    }
+
+    std::vector<std::string> Headers;
+
+    constexpr size_t LineSize = 1024 * 16;
+    char* LineData = new char[LineSize];
+    memset(LineData, 0, LineSize);
+    bool First = true;
+    while (fgets(LineData, LineSize, Pipe.get())) {
+        if (First) {
+            First = false;
+            continue;
         }
-    }
+        std::string Line = LineData + 2;
 
-    // Silly technique: Split the file into N chunks
-    std::ifstream File("cast_cache.txt");
-    size_t Begins[N] = { 0 };
-    const size_t FileSize = std::filesystem::file_size("cast_cache.txt");
-    size_t ChunkSize = FileSize / N;
-    if (ChunkSize <= 40) {
-        // Process the whole file in one go
-    }
-    ChunkSize -= 40; // 40 is approx size of a line, any value would work
-    for (size_t i = 1; i < N; ++i) {
-        Begins[i] = Begins[i - 1] + ChunkSize;
-        // fseek to that position, then advance until we hit a newline
-        File.seekg(Begins[i]);
-        char c;
-        while (File.get(c)) {
-            if (c == '\n') {
-                break;
-            }
-            ++Begins[i];
+        // May end with trailing space trailing backslash and newline
+        Line.pop_back();
+        if (Line.back() == '\\') {
+            Line.pop_back();
+            Line.pop_back();
         }
+
+        //Log(Path, "Header: " + std::string(LineData));
+        Headers.push_back(Line);
     }
+    delete[] LineData;
 
-    if (Begins[N - 1] != FileSize) {
-        throw std::runtime_error("Something went wrong");
-    }
-
-    size_t NumLines = 0;
-    // Read all the lines of cast_cache.txt
-    std::ifstream File("cast_cache.txt");
-    std::string Line;
-    while (std::getline(File, Line)) {
-        Func(Line);
-
-        ++NumLines;
-        if (NumLines % 1000 == 0 || NumLines >= 314000) {
-            std::cout << "Parsed " << NumLines << " lines" << std::endl;
-        }
-    }
-
-    // Delete cached file
-    std::filesystem::remove("cast_cache.txt");
+    return Headers;
 }
 
-template<typename T>
-void ClangASTLines(std::string ParsePath, T const& Func) {
-    ClangASTLinesCached<T, 8>(ParsePath, Func);
-}*/
-
 // Stuff for keeping track of templates
-// Ok... this isn't perfectly structured, one of Name could be eliminated its such a minor issue its not worth restructuring
 struct Template;
 
 struct KindOrType {
@@ -283,6 +325,8 @@ struct ASTNode {
 // Remove the node from its parent's children and set its parent to nullptr
 // Also recursively remove all children
 void DeleteNode(ASTPtr Node) {
+    if (!Node) return;
+
     for (auto const& Child : Node->Children) {
         DeleteNode(Child);
     }
@@ -325,16 +369,12 @@ TagType BeginsWithValidTag(char const* Line, size_t LineSize, uint32_t& End) {
     return TagType::INVALID;
 }
 
-ASTPtr LoadASTNodes(std::string const& ASTFile) {
+ASTPtr LoadASTNodes(std::string const& ASTFile, std::vector<std::filesystem::path> const& Includes, bool Silent) {
     const ASTPtr Root = std::make_shared<ASTNode>();
     Root->Indent = 0;
     ASTPtr CurrentScope = Root;
-    
-    std::ofstream CacheFile = std::ofstream("cache.txt", std::ios::out | std::ios::trunc);
 
-    ClangASTLinesPiped(ASTFile, [&](char const* CurrentLine, size_t LineSize) {
-        CacheFile << CurrentLine << std::endl;
-
+    ClangASTLinesPiped(ASTFile, Includes, [&](char const* CurrentLine, size_t LineSize) {
         size_t Indent = 0;
         char c = CurrentLine[0];
         if (c == '-' || c == '|' || c == ' ' || c == '`') {
@@ -362,7 +402,7 @@ ASTPtr LoadASTNodes(std::string const& ASTFile) {
         }
 
         CurrentScope = ToAdd;
-    });
+    }, Silent);
 
     if (Root->Children.size() < 1) return nullptr;
     Root->Children[0]->Parent = nullptr;
@@ -370,19 +410,20 @@ ASTPtr LoadASTNodes(std::string const& ASTFile) {
 }
 
 class NodeScanContext {
-public:
-    ASTPtr Root;
-
+private:
     std::vector<Template> TemplateStack;
     std::vector<std::string> NameStack;
-
-    std::string GeneratedSource;
-
     std::vector<std::string> Errors;
-
     int NumAutoReflectNamespaces = 0;
+public:
+    // The param is whether or not to generate the block as a forward declaration
+    using CodeBlockGenerator = std::function<std::string(bool)>;
 
-    std::string GetFullyQualifiedName() {
+    // Output Variables:
+    std::set<std::string> NonTemplateTypes;
+    std::map<std::string, CodeBlockGenerator> GeneratedBlocks;
+
+    std::string GetFullyQualifiedName() const {
         if (TemplateStack.empty() && NameStack.empty()) return "";
 
         std::string FullyQualified;
@@ -394,7 +435,7 @@ public:
         return FullyQualified;
     }
 
-    Template GetFlattenedTemplates() {
+    Template GetFlattenedTemplates() const {
         if (TemplateStack.empty()) return Template { };
 
         Template Flattened;
@@ -417,7 +458,6 @@ public:
             
             std::smatch ClassMatch;
             if (std::regex_search(Node->Line, ClassMatch, ClassRegex)) {
-                //std::cout << "Found class " << ClassMatch[1] << std::endl;
                 return ClassDefinition{ ClassMatch[1] };
             }
         }
@@ -565,8 +605,13 @@ public:
 
         GenerateScope(Node, Indent + 1, Generating);
 
-        NameStack.pop_back();
+        NameStack.pop_back();   
         PrintTabbed("};\n", Indent);
+
+        std::string const FullTypeName = FullyQualified + Flattened.GenerateNames();
+        if (GeneratedBlocks.find(FullTypeName) != GeneratedBlocks.end()) {
+            return;
+        }
 
         if ((NumAutoReflectNamespaces > 0 || FoundAutoReflect) && TemplateStack.size() > 1) {
             Errors.push_back("Nested templates are not supported");
@@ -574,33 +619,53 @@ public:
         }
 
         if ((NumAutoReflectNamespaces > 0 || FoundAutoReflect) && Generating) {
-            if (!Templates.empty()) GeneratedSource += Templates + "\n";
-            GeneratedSource += "inline void SerializeFields(Serializer& Ser, " + FullyQualified + Flattened.GenerateNames() + " const& Val) {\n";
-            GeneratedSource += SerializeFieldsSource;
-            GeneratedSource += "}\n\n";
+            if (TemplateStack.empty()) // Dynamic types are not supported for templates
+            {
+                NonTemplateTypes.insert(FullyQualified);
+            }
 
-            if (!Templates.empty()) GeneratedSource += Templates + "\n";
-            GeneratedSource += "inline void DeserializeFields(Deserializer& Ser, " + FullyQualified + Flattened.GenerateNames() + "& Val) {\n";
-            GeneratedSource += DeserializeFieldsSource;
-            GeneratedSource += "}\n\n";
+            GeneratedBlocks[FullTypeName] = [Templates, FullTypeName, SerializeFieldsSource, DeserializeFieldsSource](bool IsForwardDecl) {
+                std::string const Qualifier = !Templates.empty() ? "inline " : "static ";
 
-            if (!Templates.empty()) GeneratedSource += Templates + "\n";
-            GeneratedSource += "inline void Serialize(Serializer& Ser, char const* Name, " + FullyQualified + Flattened.GenerateNames() + " const& Val) {\n";
-            GeneratedSource += "    BeginObject(Ser, Name);\n";
-            GeneratedSource += "    SerializeFields(Ser, Val);\n";
-            GeneratedSource += "    EndObject(Ser);\n";
-            GeneratedSource += "}\n\n";
+                std::string GeneratedSource;
 
-            if (!Templates.empty()) GeneratedSource += Templates + "\n";
-            GeneratedSource += "inline void Deserialize(Deserializer& Ser, char const* Name, " + FullyQualified + Flattened.GenerateNames() + "& Val) {\n";
-            GeneratedSource += "    BeginObject(Ser, Name);\n";
-            GeneratedSource += "    DeserializeFields(Ser, Val);\n";
-            GeneratedSource += "    EndObject(Ser);\n";
-            GeneratedSource += "}\n\n";
+                if (IsForwardDecl) {
+                    if (!Templates.empty()) GeneratedSource += Templates + "\n";
+                    GeneratedSource += Qualifier + "void Serialize(Serializer& Ser, char const* Name, " + FullTypeName + " const& Val);\n";
+                    GeneratedSource += Qualifier + "void Deserialize(Deserializer& Ser, char const* Name, " + FullTypeName + "& Val);\n";
+                    GeneratedSource += Qualifier + "void SerializeFields(Serializer& Ser, " + FullTypeName + " const& Val);\n";
+                    GeneratedSource += Qualifier + "void DeserializeFields(Deserializer& Ser, " + FullTypeName + "& Val);\n";
+                } else {
+                    if (!Templates.empty()) GeneratedSource += Templates + "\n";
+                    GeneratedSource += Qualifier + "void SerializeFields(Serializer& Ser, " + FullTypeName + " const& Val) {\n";
+                    GeneratedSource += SerializeFieldsSource;
+                    GeneratedSource += "}\n\n";
+
+                    if (!Templates.empty()) GeneratedSource += Templates + "\n";
+                    GeneratedSource += Qualifier + "void DeserializeFields(Deserializer& Ser, " + FullTypeName + "& Val) {\n";
+                    GeneratedSource += DeserializeFieldsSource;
+                    GeneratedSource += "}\n\n";
+
+                    if (!Templates.empty()) GeneratedSource += Templates + "\n";
+                    GeneratedSource += Qualifier + "void Serialize(Serializer& Ser, char const* Name, " + FullTypeName + " const& Val) {\n";
+                    GeneratedSource += "    BeginObject(Ser, Name);\n";
+                    GeneratedSource += "    SerializeFields(Ser, Val);\n";
+                    GeneratedSource += "    EndObject(Ser);\n";
+                    GeneratedSource += "}\n\n";
+
+                    if (!Templates.empty()) GeneratedSource += Templates + "\n";
+                    GeneratedSource += Qualifier + "void Deserialize(Deserializer& Ser, char const* Name, " + FullTypeName + "& Val) {\n";
+                    GeneratedSource += "    BeginObject(Ser, Name);\n";
+                    GeneratedSource += "    DeserializeFields(Ser, Val);\n";
+                    GeneratedSource += "    EndObject(Ser);\n";
+                    GeneratedSource += "}\n\n";
+                }
+
+                return GeneratedSource;
+            };
         }
     }
 
-    // Works for classes, namespaces, translation units, with special behavior handled by the specific function
     void GenerateScope(ASTPtr Node, int Indent, bool Generating) {
         SCOPE_TIMER
 
@@ -630,64 +695,202 @@ public:
             }
         }
     }
+
+    int GenerateFile(ASTPtr Root) {
+        CallOnDtor OnDtor([&]() {
+            TemplateStack.clear();
+            NameStack.clear();
+            Errors.clear();
+            NumAutoReflectNamespaces = 0;
+        });
+
+        if (!Root) {
+            std::cerr << "Failed to load AST nodes (internal error)" << std::endl;
+            return 1;
+        }
+
+        GenerateScope(Root, 0, true);
+
+        for (std::string const& Error : Errors) {
+            std::cerr << Error << std::endl;
+        }
+
+        return 0;
+    }
 };
 
-int main(int argc, char** argv) {
-    if (false)
-    if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <filename>" << std::endl;
-        return 1;
-    }
-
-    std::string Filename = argc < 2 ? std::string("../Source/AutoReflectTest.cpp") : std::string(argv[1]);
-    
-    std::filesystem::path ResourcePath = AR_RESOURCES_DIR;
-
-    std::string GeneratedFilename = Filename.substr(0, Filename.find_last_of('.')) + ".generated.inl";
-
-    std::filesystem::copy_file(ResourcePath / "null_generated.inl", GeneratedFilename, std::filesystem::copy_options::overwrite_existing);
-
-    std::cout << "Generating " << GeneratedFilename << "..." << std::endl;
+int GenerateSingleFile(NodeScanContext& Context, std::filesystem::path const& Path, std::vector<std::filesystem::path> const& IncludePaths, bool Silent) {
     std::chrono::steady_clock::time_point ParseBegin = std::chrono::steady_clock::now();
 
-    NodeScanContext Context;
-    ASTPtr Root = LoadASTNodes(Filename);
+    ASTPtr Root = LoadASTNodes(Path, IncludePaths, Silent);
+
+    CallOnDtor OnDtor([Root]() {
+        //DeleteNode(Root);
+    });
 
     std::chrono::steady_clock::time_point ParseEnd = std::chrono::steady_clock::now();
-    std::cout << "Parsed in " << std::chrono::duration_cast<std::chrono::milliseconds>(ParseEnd - ParseBegin).count() << "ms" << std::endl;
-
-    if (!Root) {
-        std::cerr << "Failed to load AST nodes (internal error)" << std::endl;
-        return 1;
-    }
+    if (!Silent) Log(Path, "Parsed in " + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(ParseEnd - ParseBegin).count()) + "ms");
     
     std::chrono::steady_clock::time_point Begin = std::chrono::steady_clock::now();
     
     try {
-        Context.GenerateScope(Root, 0, true);
+        Context.GenerateFile(Root);
     } catch (std::runtime_error const& Er) {
-        std::cerr << "Failed during generation: " << Er.what() << std::endl;
+        std::cerr << "Failed during generation (internal error): " << Er.what() << std::endl;
         return 1;
     }
 
-    std::ofstream GeneratedFile(GeneratedFilename, std::ios::ate);
-
-    GeneratedFile << "#pragma once" << std::endl << std::endl;
-    GeneratedFile << "#include <SerializeBaseImpl.hpp>" << std::endl << std::endl;
-    GeneratedFile << Context.GeneratedSource;
-
-    for (std::string const& Error : Context.Errors) {
-        std::cerr << Error << std::endl;
-    }
-
-    std::cout << "Generated source of " << Context.GeneratedSource.size() << " bytes" << std::endl;
     std::chrono::steady_clock::time_point End = std::chrono::steady_clock::now();
-    std::cout << "Generated in " << std::chrono::duration_cast<std::chrono::milliseconds>(End - Begin).count() << "ms" << std::endl;
+    if (!Silent) Log(Path, "Generated in " + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(End - Begin).count()) + "ms");
+
+    return 0;
+}
+
+// TODO: Use an acceleration structure instead of just if statements
+std::string GenDynamicReflection(NodeScanContext const& Context) {
+    std::stringstream GeneratedFile;
+
+    GeneratedFile << "static void DeserializeFields(Deserializer& Ser, std::any& Val) {" << std::endl;
+    GeneratedFile << "    if (Ser.GetCurrentScope() == nullptr) {" << std::endl;
+    GeneratedFile << "        Val.reset();" << std::endl;
+    GeneratedFile << "        return;" << std::endl;
+    GeneratedFile << "    }" << std::endl;
+    GeneratedFile << "    std::string const Type = Ser.AtChecked(\"Type\");" << std::endl;
+    for (std::string const& TypeName : Context.NonTemplateTypes) {
+        GeneratedFile << "    if (Type == \"" << TypeName << "\") {" << std::endl;
+        GeneratedFile << "        BeginObject(Ser, \"Value\");" << std::endl;
+        GeneratedFile << "        " << TypeName << " Temp;" << std::endl;
+        GeneratedFile << "        DeserializeFields(Ser, Temp);" << std::endl;
+        GeneratedFile << "        Val = Temp;" << std::endl;
+        GeneratedFile << "        EndObject(Ser);" << std::endl;
+        GeneratedFile << "        return;" << std::endl;
+        GeneratedFile << "    }" << std::endl;
+    }
+    GeneratedFile << "    throw std::runtime_error(\"Unknown type \" + Type);" << std::endl;
+    GeneratedFile << "}" << std::endl << std::endl;
     
-    std::cout << "Times:" << std::endl;
-    for (auto kvp : Times) {
-        std::cout << kvp.first << ": " << std::chrono::duration_cast<std::chrono::milliseconds>(kvp.second).count() << std::endl;
+    GeneratedFile << "static void Deserialize(Deserializer& Ser, char const* Name, std::any& Val) {" << std::endl;
+    GeneratedFile << "    BeginObject(Ser, Name);" << std::endl;
+    GeneratedFile << "    DeserializeFields(Ser, Val);" << std::endl;
+    GeneratedFile << "    EndObject(Ser);" << std::endl;
+    GeneratedFile << "}" << std::endl << std::endl;
+
+    GeneratedFile << "static void SerializeFields(Serializer& Ser, std::any const& Val) {" << std::endl;
+    GeneratedFile << "    if (!Val.has_value()) {" << std::endl;
+    GeneratedFile << "        Ser.GetCurrentScope() = nullptr;" << std::endl;
+    GeneratedFile << "        return;" << std::endl;
+    GeneratedFile << "    }" << std::endl;
+    for (std::string const& TypeName : Context.NonTemplateTypes) {
+        GeneratedFile << "    if (Val.type() == typeid(" << TypeName << ")) {" << std::endl;
+        GeneratedFile << "        Ser.AtChecked(\"Type\") = \"" << TypeName << "\";" << std::endl;
+        GeneratedFile << "        BeginObject(Ser, \"Value\");" << std::endl;
+        GeneratedFile << "        SerializeFields(Ser, std::any_cast<" << TypeName << ">(Val));" << std::endl;
+        GeneratedFile << "        EndObject(Ser);" << std::endl;
+        GeneratedFile << "        return;" << std::endl;
+        GeneratedFile << "    }" << std::endl;
+    }
+    GeneratedFile << "    throw std::runtime_error(\"Unsupported type \" + std::string(Val.type().name()));" << std::endl;
+    GeneratedFile << "}" << std::endl << std::endl;
+    
+    GeneratedFile << "static void Serialize(Serializer& Ser, char const* Name, std::any const& Val) {" << std::endl;
+    GeneratedFile << "    BeginObject(Ser, Name);" << std::endl;
+    GeneratedFile << "    SerializeFields(Ser, Val);" << std::endl;
+    GeneratedFile << "    EndObject(Ser);" << std::endl;
+    GeneratedFile << "}" << std::endl << std::endl;
+
+    return GeneratedFile.str();
+}
+
+int main(int argc, char** argv) {
+    std::vector<std::filesystem::path> IncludePaths; // TODO: Use this
+    std::vector<std::filesystem::path> FilesToParse;
+    std::vector<std::filesystem::path> ProjectHeaders;
+
+    bool Silent = false;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string Arg = argv[i];
+        if (Arg == "-S") {
+            Silent = true;
+        } else if (Arg == "-I" && i + 1 < argc) {
+            IncludePaths.push_back(argv[++i]);
+        } else {
+            // Split between h/hpp and cpp files
+            if (Arg.find(".h") != std::string::npos || Arg.find(".hpp") != std::string::npos) {
+                ProjectHeaders.push_back(Arg);
+            } else {
+                FilesToParse.push_back(Arg);
+            }
+        }
     }
 
+    if (FilesToParse.empty()) {
+        FilesToParse.push_back("../Source/AutoReflectTest.cpp");
+        FilesToParse.push_back("../Source/AdditionalCpp.cpp");
+    }
+
+    ParallelFor([Silent, IncludePaths](std::filesystem::path const& Path) {
+        NodeScanContext Context;
+        int NumErrors = 0;
+
+        // Convert input name to ouput, ie Foo.cpp -> Foo.generated
+        std::filesystem::path OutputPath = Path.parent_path() / Path.filename().replace_extension(".generated.inl");
+
+        // Get write date of output file
+        auto const OutputWriteTime = std::filesystem::exists(OutputPath) ? std::filesystem::last_write_time(OutputPath) : std::filesystem::file_time_type::min();
+        auto const InputWriteTime = std::filesystem::last_write_time(Path);
+        
+        bool AnyNewer = false;
+        if (InputWriteTime > OutputWriteTime) {
+            AnyNewer = true;
+            if (!Silent) Log(Path, "Output is newer than input");
+        } else {
+            for (auto header : GetAllHeaders(Path, IncludePaths, Silent)) {
+                if (std::filesystem::last_write_time(header) > OutputWriteTime) {
+                    AnyNewer = true;
+                    if (!Silent) Log(Path, "Header " + header + " is newer than output");
+                    break;
+                }
+            }
+        }
+
+        if (!AnyNewer) {
+            if (!Silent) Log(Path, "Skipping");
+            return;
+        }
+
+        std::filesystem::copy_file(
+            std::filesystem::path(AR_RESOURCES_DIR) / "null_generated.h",
+            OutputPath,
+            std::filesystem::copy_options::overwrite_existing
+        );
+
+        if (int Result = GenerateSingleFile(Context, Path, IncludePaths, Silent)) {
+            std::cerr << "Failed to generate " << Path << std::endl;
+            ++NumErrors;
+            return;
+        }
+
+        std::ofstream GeneratedFile(OutputPath, std::ios::ate);
+
+        GeneratedFile << "#pragma once" << std::endl << std::endl;
+        GeneratedFile << "#include <SerializeBaseImpl.hpp>" << std::endl << std::endl;
+
+        // First, do all forward decls in the header
+        for (auto const& kvp : Context.GeneratedBlocks) {
+            if (Context.NonTemplateTypes.find(kvp.first) == Context.NonTemplateTypes.end()) {
+                continue; // Skip templates
+            }
+            GeneratedFile << kvp.second(true) << std::endl;
+        }
+
+        for (auto const& kvp : Context.GeneratedBlocks) {
+            GeneratedFile << "// " << kvp.first << std::endl;
+            GeneratedFile << kvp.second(false) << std::endl;
+        }
+
+        GeneratedFile << GenDynamicReflection(Context) << std::endl;
+    }, FilesToParse);
+    
     return 0;
 }
