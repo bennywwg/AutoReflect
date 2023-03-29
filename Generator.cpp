@@ -47,13 +47,36 @@ struct CallOnDtor {
 template<typename F, typename T>
 void ParallelFor(F Func, std::vector<T> const& Inputs) {
     std::vector<std::thread> Threads;
-    for (auto const& Input : Inputs) {
-        Threads.emplace_back([Input, Func](){
-            Func(Input);
-        });
+    Threads.resize(std::thread::hardware_concurrency());
+    std::vector<std::atomic<int>*> ThreadStates; // 0 = fresh, 1 = done, 2 = running
+    for (size_t i = 0; i < Threads.size(); ++i) ThreadStates.push_back(new std::atomic<int>(0));
+
+    for (size_t i = 0; i < Inputs.size(); ++i) {
+        bool Found = false;
+        for (size_t ThreadIndex = 0; ThreadIndex < Threads.size(); ++ThreadIndex) {
+            if (ThreadStates[ThreadIndex]->load() <= 1) {
+                if (ThreadStates[ThreadIndex]->load() == 1) Threads[ThreadIndex].join();
+                ThreadStates[ThreadIndex]->store(2);
+                Threads[ThreadIndex] = std::thread([Func, &ThreadStates, ThreadIndex, &Inputs, i](){
+                    CallOnDtor OnDtor([&ThreadStates, ThreadIndex](){
+                        ThreadStates[ThreadIndex]->store(1);
+                    });
+
+                    Func(Inputs[i]);
+                });
+                Found = true;
+                break;
+            }
+        }
+        if (!Found) std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    for (auto& Thread : Threads) {
-        Thread.join();
+
+    // Join any remaining threads
+    for (size_t ThreadIndex = 0; ThreadIndex < Threads.size(); ++ThreadIndex) {
+        if (ThreadStates[ThreadIndex]->load() != 0) {
+            Threads[ThreadIndex].join();
+        }
+        delete ThreadStates[ThreadIndex];
     }
 }
 
@@ -222,7 +245,7 @@ std::vector<std::string> GetAllHeaders(std::filesystem::path const& Path, std::v
     memset(LineData, 0, LineSize);
     bool First = true;
     while (fgets(LineData, LineSize, Pipe.get())) {
-        if (First) {
+        if (First || LineSize < 2) {
             First = false;
             continue;
         }
@@ -233,6 +256,19 @@ std::vector<std::string> GetAllHeaders(std::filesystem::path const& Path, std::v
         if (Line.back() == '\\') {
             Line.pop_back();
             Line.pop_back();
+        }
+
+        // And apparently, spaces can also be delimiter not just newlines
+        while (true) {
+            // Find next space, take substring up to that, or the whole thing if no space
+            size_t SpacePos = Line.find(' ');
+            if (SpacePos == std::string::npos) {
+                Headers.push_back(Line);
+                break;
+            } else {
+                Headers.push_back(Line.substr(0, SpacePos));
+                Line = Line.substr(SpacePos + 1);
+            }
         }
 
         //Log(Path, "Header: " + std::string(LineData));
@@ -890,6 +926,11 @@ int main(int argc, char** argv) {
             if (!Silent) Log(Path, "Output is newer than input");
         } else {
             for (auto header : GetAllHeaders(Path, IncludePaths, Silent)) {
+                if (!std::filesystem::exists(header)) {
+                    // Print in red
+                    std::cerr << "\033[31m" << "Header " << header << " does not exist" << "\033[0m" << std::endl;
+                    continue;
+                }
                 if (std::filesystem::last_write_time(header) > OutputWriteTime) {
                     AnyNewer = true;
                     if (!Silent) Log(Path, "Header " + header + " is newer than output");
