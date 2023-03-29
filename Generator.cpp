@@ -308,6 +308,7 @@ enum class TagType {
     TemplateTemplateParmDecl,
     Public,
     Private,
+    EnumDecl,
     TranslationUnitDecl
 };
 
@@ -355,7 +356,6 @@ bool StartsWith(uint32_t& OutSize, char const* Line, size_t LineSize, char const
 }
 
 TagType BeginsWithValidTag(char const* Line, size_t LineSize, uint32_t& End) {
-    //(TranslationUnitDecl|NamespaceDecl|CXXRecordDecl|FieldDecl|public|private|ClassTemplateDecl|TemplateTypeParmDecl|NonTypeTemplateParmDecl|TemplateTemplateParmDecl)
     if (StartsWith(End, Line, LineSize, "FieldDecl", 9)) return TagType::FieldDecl;
     if (StartsWith(End, Line, LineSize, "CXXRecordDecl", 13)) return TagType::CXXRecordDecl;
     if (StartsWith(End, Line, LineSize, "NamespaceDecl", 13)) return TagType::NamespaceDecl;
@@ -365,6 +365,7 @@ TagType BeginsWithValidTag(char const* Line, size_t LineSize, uint32_t& End) {
     if (StartsWith(End, Line, LineSize, "TemplateTemplateParmDecl", 24)) return TagType::TemplateTemplateParmDecl;
     if (StartsWith(End, Line, LineSize, "public", 6)) return TagType::Public;
     if (StartsWith(End, Line, LineSize, "private", 7)) return TagType::Private;
+    if (StartsWith(End, Line, LineSize, "EnumDecl", 8)) return TagType::EnumDecl;
     if (StartsWith(End, Line, LineSize, "TranslationUnitDecl", 19)) return TagType::TranslationUnitDecl;
     return TagType::INVALID;
 }
@@ -414,6 +415,7 @@ private:
     std::vector<Template> TemplateStack;
     std::vector<std::string> NameStack;
     std::vector<std::string> Errors;
+    std::map<std::string, std::string> EnumTypeMaps;
     int NumAutoReflectNamespaces = 0;
 public:
     // The param is whether or not to generate the block as a forward declaration
@@ -446,6 +448,30 @@ public:
         }
 
         return Flattened;
+    }
+
+    struct EnumDefinition {
+        std::string LocalEnumName;
+        std::string UnderlyingType;
+    };
+    Opt<EnumDefinition> GetAsEnumDefinition(ASTPtr Node) {
+        // | |-EnumDecl 0x1388c5eb0 <line:8:5, line:13:5> line:8:16 class TheBlooper 'uint8_t':'unsigned char'
+        SCOPE_TIMER
+        if (Node->Tag != TagType::EnumDecl) return std::nullopt;
+        if (Node->Line.back() != '\'') return std::nullopt;
+
+        auto ClassIndex = Node->Line.find("class ");
+        if (ClassIndex == std::string::npos) return std::nullopt;
+
+        std::string Line = Node->Line.substr(ClassIndex + 6);
+        auto NextSpaceIndex = Line.find(' ');
+        if (NextSpaceIndex == std::string::npos) return std::nullopt;
+
+        Line.pop_back(); // Remove the '
+        auto LastSpaceIndex = Line.find_last_of('\'');
+        if (LastSpaceIndex == std::string::npos) return std::nullopt;
+
+        return EnumDefinition { Line.substr(0, NextSpaceIndex), Line.substr(LastSpaceIndex + 1) };
     }
 
     struct ClassDefinition {
@@ -596,8 +622,18 @@ public:
                 FieldDefinition FD = *FieldDef;
                 PrintTabbed(FD.TypeName + " " + FD.VarName + ";\n", Indent + 1);
 
-                SerializeFieldsSource += "    Serialize(Ser, \"" + FD.VarName + "\", Val." + FD.VarName + ");\n";
-                DeserializeFieldsSource += "    Deserialize(Ser, \"" + FD.VarName + "\", Val." + FD.VarName + ");\n";
+                std::string SerializeName = "Val." + FD.VarName;
+                if (EnumTypeMaps.find(FD.TypeName) != EnumTypeMaps.end()) {
+                    SerializeName = "static_cast<" + EnumTypeMaps[FD.TypeName] + ">(" + SerializeName + ")";
+                }
+
+                std::string DeserializeName = "Val." + FD.VarName;
+                if (EnumTypeMaps.find(FD.TypeName) != EnumTypeMaps.end()) {
+                    DeserializeName = "*reinterpret_cast<" + EnumTypeMaps[FD.TypeName] + "*>(&" + DeserializeName + ")";
+                }
+
+                SerializeFieldsSource += "    Serialize(Ser, \"" + FD.VarName + "\", " + SerializeName + ");\n";
+                DeserializeFieldsSource += "    Deserialize(Ser, \"" + FD.VarName + "\", " + DeserializeName + ");\n";
             } else if ((Child->Tag == TagType::Private || Child->Tag == TagType::Public) && Child->Line == "'AutoReflect'") {
                 FoundAutoReflect = true;
             }
@@ -692,6 +728,14 @@ public:
                 NameStack.pop_back();
                 if (NamespaceDef->LocalNamespaceName == "AutoReflect") --NumAutoReflectNamespaces;
                 PrintTabbed("}\n", Indent);
+            } else if (Opt<EnumDefinition> EnumDef = GetAsEnumDefinition(Child)) {
+                // Get fully qualified version of enum name, may not always work
+                std::string FullyQualified;
+                for (std::string const& Name : NameStack) {
+                    FullyQualified += Name + "::";
+                }
+                FullyQualified += EnumDef->LocalEnumName;
+                EnumTypeMaps[FullyQualified] = EnumDef->UnderlyingType;
             }
         }
     }
