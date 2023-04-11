@@ -63,7 +63,7 @@ void main(int argc, char** argv) {
 ## Limitations
 Pointer, const, and reference types are untested, but they certainly won't produce good results. Don't use them as fields in `AutoReflect` classes.
 
-Reflection definitions are generated in `{YourFileName}.generated.inl`. All your reflectable classsed must be declared before that file is included, which somewhat limits the flexibility of code layout.
+Reflection definitions are generated in `{YourFileName}.gen.inl`. All your reflectable classsed must be declared before that file is included, which somewhat limits the flexibility of code layout.
 
 Only classes are supported, not structs. Limited support for STL containers is provided.
 
