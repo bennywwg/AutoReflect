@@ -57,7 +57,7 @@ void ParallelFor(F Func, std::vector<T> const& Inputs) {
     std::vector<std::atomic<int>*> ThreadStates; // 0 = fresh, 1 = done, 2 = running
     for (size_t i = 0; i < Threads.size(); ++i) ThreadStates.push_back(new std::atomic<int>(0));
 
-    for (size_t i = 0; i < Inputs.size(); ++i) {
+    for (size_t i = 0; i < Inputs.size();) {
         bool Found = false;
         for (size_t ThreadIndex = 0; ThreadIndex < Threads.size(); ++ThreadIndex) {
             if (ThreadStates[ThreadIndex]->load() <= 1) {
@@ -71,6 +71,7 @@ void ParallelFor(F Func, std::vector<T> const& Inputs) {
                     Func(Inputs[i]);
                 });
                 Found = true;
+                ++i;
                 break;
             }
         }
