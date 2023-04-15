@@ -16,279 +16,14 @@
 #include <functional>
 #include <thread>
 
-#ifndef _WIN32 
-#define POPEN popen
-#define PCLOSE pclose
-#else
-#define POPEN _popen
-#define PCLOSE _pclose
-#endif
+#include "Parsing.hpp"
 
 #define GeneratedSuffix ".gen.inl"
 
 const std::regex ClassRegex("class ([a-zA-Z0-9_]+) definition");
 const std::regex FieldRegex("([a-zA-Z0-9_]+) '([a-zA-Z0-9_:<>, \\*\\&\\[\\]]+)'");
 
-std::mutex Mutex;
-
-void Log(std::filesystem::path const& Task, std::string const& Str) {
-    std::lock_guard<std::mutex> Lock(Mutex);
-    std::cout << "AutoReflect " << Task << ": " << Str << std::endl;
-}
-
-struct CallOnDtor {
-    std::function<void()> Func;
-    CallOnDtor(std::function<void()> Func)
-    : Func(Func)
-    {}
-    ~CallOnDtor() {
-        Func();
-    }
-    CallOnDtor(CallOnDtor const&) = delete;
-    CallOnDtor(CallOnDtor&&) = delete;
-    CallOnDtor& operator=(CallOnDtor const&) = delete;
-    CallOnDtor& operator=(CallOnDtor&&) = delete;
-};
-
-template<typename F, typename T>
-void ParallelFor(F Func, std::vector<T> const& Inputs) {
-    std::vector<std::thread> Threads;
-    Threads.resize(std::thread::hardware_concurrency());
-    std::vector<std::atomic<int>*> ThreadStates; // 0 = fresh, 1 = done, 2 = running
-    for (size_t i = 0; i < Threads.size(); ++i) ThreadStates.push_back(new std::atomic<int>(0));
-
-    for (size_t i = 0; i < Inputs.size();) {
-        bool Found = false;
-        for (size_t ThreadIndex = 0; ThreadIndex < Threads.size(); ++ThreadIndex) {
-            if (ThreadStates[ThreadIndex]->load() <= 1) {
-                if (ThreadStates[ThreadIndex]->load() == 1) Threads[ThreadIndex].join();
-                ThreadStates[ThreadIndex]->store(2);
-                Threads[ThreadIndex] = std::thread([Func, &ThreadStates, ThreadIndex, &Inputs, i](){
-                    CallOnDtor OnDtor([&ThreadStates, ThreadIndex](){
-                        ThreadStates[ThreadIndex]->store(1);
-                    });
-
-                    Func(Inputs[i]);
-                });
-                Found = true;
-                ++i;
-                break;
-            }
-        }
-        if (!Found) std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-
-    // Join any remaining threads
-    for (size_t ThreadIndex = 0; ThreadIndex < Threads.size(); ++ThreadIndex) {
-        if (ThreadStates[ThreadIndex]->load() != 0) {
-            Threads[ThreadIndex].join();
-        }
-        delete ThreadStates[ThreadIndex];
-    }
-}
-
-std::vector<std::string> SplitForTemplate(std::string const& Val) {
-    std::vector<std::string> result;
-    result.reserve(5);
-    std::stringstream ss (Val);
-    std::string item;
-
-    while (std::getline (ss, item, ' ')) {
-        result.push_back (item);
-    }
-
-    return result;
-}
-
-bool GetTemplateParams(std::string const& Line, std::string& Type, std::string& Name, bool& HasType) {
-    auto Sections = SplitForTemplate(Line);
-    int NumDots = 0;
-    int NumVars = 0;
-    if (Sections.back()[0] >= '0' && Sections.back()[0] <= '9') {
-        Name = "";
-    } else {
-        NumVars = 1;
-        Name = Sections.back();
-    }
-    if (Sections[Sections.size() - 1 - NumVars][0] == '.') {
-        NumDots = 1;
-    }
-    
-    Type = Sections[Sections.size() - NumVars - NumDots - 5];
-    return true;
-}
-
-//std::map<int, std::chrono::high_resolution_clock::duration> Times;
-
-//struct ScopeTimer;
-
-//std::vector<ScopeTimer*> TimerStack;
-
-/*
-struct ScopeTimer {
-    std::chrono::high_resolution_clock::time_point Begin;
-    const int Line;
-    std::chrono::high_resolution_clock::duration TotalTime;
-    ScopeTimer(int Line)
-    : Line(Line)
-    , Begin(std::chrono::high_resolution_clock::now())
-    , TotalTime(0)
-    {
-        if (!TimerStack.empty()) {
-            TimerStack.back()->Pause();
-        }
-        TimerStack.push_back(this);
-    }
-    
-    ~ScopeTimer() {
-        Pause();
-        Times[Line] += TotalTime;
-        TimerStack.pop_back();
-        if (!TimerStack.empty()) {
-            TimerStack.back()->Resume();
-        }
-    }
-    
-    void Pause() {
-        TotalTime += std::chrono::high_resolution_clock::now() - Begin;
-    }
-    
-    void Resume() {
-        Begin = std::chrono::high_resolution_clock::now();
-    }
-};*/
-
-//#define SCOPE_TIMER ScopeTimer T##__LINE__(__LINE__);
-#define SCOPE_TIMER
-
-void PrintTabbed(std::string const& Str, int TabCount) {
-    return;
-    for (int i = 0; i < TabCount; ++i) {
-        std::cout << "    ";
-    }
-    std::cout << Str;
-}
-
-template<typename T>
-using Opt = std::optional<T>;
-
-template<typename T>
-void ClangASTLinesPiped(std::string ParsePath, std::vector<std::filesystem::path> const& Includes, T const& Func, bool Silent) {
-    std::string ClangASTCommand
-#ifdef _WIN32
-    = "cmd /c \"clang -std=c++20 -Xclang -ast-dump -fsyntax-only -fno-color-diagnostics -I"
-    + std::string(AR_INCLUDE_DIR);
-    
-    for (auto const& Include : Includes) {
-        ClangASTCommand += " -I\"" + Include.string() + "\"";
-    }
-    
-    ClangASTCommand += " " + ParsePath
-    + " 2>NUL\"";
-#else
-    = "clang -std=c++20 -Xclang -ast-dump -fsyntax-only -fno-color-diagnostics -I"
-    + std::string(AR_INCLUDE_DIR);
-    
-    for (auto const& Include : Includes) {
-        ClangASTCommand += " -I\"" + Include.string() + "\"";
-    }
-
-    ClangASTCommand += " " + ParsePath
-    + " 2>/dev/null";
-#endif
-
-    if (!Silent) Log(ParsePath, "Clang command: " + ClangASTCommand);
-
-    std::unique_ptr<FILE, decltype(&PCLOSE)> Pipe(POPEN(ClangASTCommand.c_str(), "r"), PCLOSE);
-    if (!Pipe) {
-        throw std::runtime_error("popen() failed!");
-    }
-
-    constexpr size_t LineSize = 1024 * 16;
-    char* LineData = new char[LineSize];
-    memset(LineData, 0, LineSize);
-    while (fgets(LineData, LineSize, Pipe.get())) {
-        size_t Len = strlen(LineData);
-
-        LineData[Len - 1] = 0;
-        Func(LineData, Len - 1);
-    }
-    delete[] LineData;
-}
-
-std::vector<std::string> GetAllHeaders(std::filesystem::path const& Path, std::vector<std::filesystem::path> const& Includes, bool Silent) {
-    std::string GetHeadersCommand
-#ifdef _WIN32
-    = "cmd /c \"clang -std=c++20 -M";
-    
-    for (auto const& Include : Includes) {
-        GetHeadersCommand += " -I\"" + Include.string() + "\"";
-    }
-    
-    ClangASTCommand += " " + Path.string()
-    + " 2>NUL\"";
-#else
-    = "clang -std=c++20 -M";
-    
-    for (auto const& Include : Includes) {
-        GetHeadersCommand += " -I\"" + Include.string() + "\"";
-    }
-
-    GetHeadersCommand += " " + Path.string()
-    + " 2>/dev/null";
-#endif
-
-    if (!Silent) Log(Path, "Clang command: " + GetHeadersCommand);
-
-    std::unique_ptr<FILE, decltype(&PCLOSE)> Pipe(POPEN(GetHeadersCommand.c_str(), "r"), PCLOSE);
-    if (!Pipe) {
-        throw std::runtime_error("popen() failed!");
-    }
-
-    std::vector<std::string> Headers;
-
-    constexpr size_t LineSize = 1024 * 16;
-    char* LineData = new char[LineSize];
-    memset(LineData, 0, LineSize);
-    bool First = true;
-    while (fgets(LineData, LineSize, Pipe.get())) {
-        if (First || LineSize < 2) {
-            First = false;
-            continue;
-        }
-        std::string Line = LineData + 2;
-
-        // May end with trailing space trailing backslash and newline
-        Line.pop_back();
-        if (Line.back() == '\\') {
-            Line.pop_back();
-            Line.pop_back();
-        }
-
-        // And apparently, spaces can also be delimiter not just newlines
-        while (true) {
-            // Find next space, take substring up to that, or the whole thing if no space
-            size_t SpacePos = Line.find(' ');
-            if (SpacePos == std::string::npos) {
-                Headers.push_back(Line);
-                break;
-            } else {
-                Headers.push_back(Line.substr(0, SpacePos));
-                Line = Line.substr(SpacePos + 1);
-            }
-        }
-
-        //Log(Path, "Header: " + std::string(LineData));
-        Headers.push_back(Line);
-    }
-    delete[] LineData;
-
-    return Headers;
-}
-
-// Stuff for keeping track of templates
 struct Template;
-
 struct KindOrType {
     std::string KindOrTypeName;
     std::string Name;
@@ -336,124 +71,7 @@ struct Template {
     }
 };
 
-struct ASTNode;
-using ASTPtr = std::shared_ptr<ASTNode>;
-using NodeFunc = std::function<void(ASTPtr)>;
-
-enum class TagType {
-    INVALID,
-    FieldDecl,
-    CXXRecordDecl,
-    NamespaceDecl,
-    ClassTemplateDecl,
-    TemplateTypeParmDecl,
-    NonTypeTemplateParmDecl,
-    TemplateTemplateParmDecl,
-    Public,
-    Private,
-    EnumDecl,
-    TranslationUnitDecl
-};
-
-// A slightly higher level representation of the AST generated by clang
-struct ASTNode {
-    int Indent = -1;
-    TagType Tag = TagType::INVALID;
-    std::string Line;
-
-    std::shared_ptr<ASTNode> Parent;
-    std::vector<std::shared_ptr<ASTNode>> Children;
-};
-
-
-// Remove the node from its parent's children and set its parent to nullptr
-// Also recursively remove all children
-void DeleteNode(ASTPtr Node) {
-    if (!Node) return;
-
-    for (auto const& Child : Node->Children) {
-        DeleteNode(Child);
-    }
-
-    // Find the node in the parent's children
-    auto const& Parent = Node->Parent;
-    auto const& Children = Parent->Children;
-    auto const& It = std::find(Children.begin(), Children.end(), Node);
-    if (It == Children.end()) {
-        throw std::runtime_error("Node not found in parent's children");
-    }
-
-    // Remove the node from the parent's children
-    Parent->Children.erase(It);
-    Node->Parent = nullptr;
-}
-
-bool StartsWith(uint32_t& OutSize, char const* Line, size_t LineSize, char const* Match, uint32_t const& MatchSize) {
-    if (LineSize <= MatchSize) return false;
-    for (size_t i = 0; i < MatchSize; ++i) if (Line[i] != Match[i]) return false;
-    if (Line[MatchSize] == ' ') {
-        OutSize = MatchSize + 1;
-        return true;
-    }
-    return false;
-}
-
-TagType BeginsWithValidTag(char const* Line, size_t LineSize, uint32_t& End) {
-    if (StartsWith(End, Line, LineSize, "FieldDecl", 9)) return TagType::FieldDecl;
-    if (StartsWith(End, Line, LineSize, "CXXRecordDecl", 13)) return TagType::CXXRecordDecl;
-    if (StartsWith(End, Line, LineSize, "NamespaceDecl", 13)) return TagType::NamespaceDecl;
-    if (StartsWith(End, Line, LineSize, "ClassTemplateDecl", 17)) return TagType::ClassTemplateDecl;
-    if (StartsWith(End, Line, LineSize, "TemplateTypeParmDecl", 20)) return TagType::TemplateTypeParmDecl;
-    if (StartsWith(End, Line, LineSize, "NonTypeTemplateParmDecl", 23)) return TagType::NonTypeTemplateParmDecl;
-    if (StartsWith(End, Line, LineSize, "TemplateTemplateParmDecl", 24)) return TagType::TemplateTemplateParmDecl;
-    if (StartsWith(End, Line, LineSize, "public", 6)) return TagType::Public;
-    if (StartsWith(End, Line, LineSize, "private", 7)) return TagType::Private;
-    if (StartsWith(End, Line, LineSize, "EnumDecl", 8)) return TagType::EnumDecl;
-    if (StartsWith(End, Line, LineSize, "TranslationUnitDecl", 19)) return TagType::TranslationUnitDecl;
-    return TagType::INVALID;
-}
-
-ASTPtr LoadASTNodes(std::string const& ASTFile, std::vector<std::filesystem::path> const& Includes, bool Silent) {
-    const ASTPtr Root = std::make_shared<ASTNode>();
-    Root->Indent = 0;
-    ASTPtr CurrentScope = Root;
-
-    ClangASTLinesPiped(ASTFile, Includes, [&](char const* CurrentLine, size_t LineSize) {
-        size_t Indent = 0;
-        char c = CurrentLine[0];
-        if (c == '-' || c == '|' || c == ' ' || c == '`') {
-            while (c == '-' || c == '|' || c == ' ' || c == '`') {
-                c = CurrentLine[Indent++];
-            }
-            --Indent;
-        }
-
-        // Pop if we are at a lower or equal indent level
-        while (Indent <= CurrentScope->Indent && CurrentScope != Root) {
-            CurrentScope = CurrentScope->Parent;
-        }
-
-        ASTPtr ToAdd = std::make_shared<ASTNode>();
-        ToAdd->Parent = CurrentScope;
-        ToAdd->Indent = static_cast<int>(Indent);
-
-        uint32_t OutSize;
-        TagType Tag = BeginsWithValidTag(CurrentLine + Indent, LineSize - Indent, OutSize);
-        ToAdd->Tag = Tag;
-        if (Tag != TagType::INVALID) {
-            ToAdd->Line = CurrentLine + Indent + OutSize;
-            CurrentScope->Children.push_back(ToAdd);
-        }
-
-        CurrentScope = ToAdd;
-    }, Silent);
-
-    if (Root->Children.size() < 1) return nullptr;
-    Root->Children[0]->Parent = nullptr;
-    return Root->Children[0];
-}
-
-class NodeScanContext {
+class GeneratorContext {
 private:
     std::vector<Template> TemplateStack;
     std::vector<std::string> NameStack;
@@ -461,8 +79,13 @@ private:
     std::map<std::string, std::string> EnumTypeMaps;
     int NumAutoReflectNamespaces = 0;
 public:
-    // The param is whether or not to generate the block as a forward declaration
-    using CodeBlockGenerator = std::function<std::string(bool)>;
+    enum GenMode {
+        ForwardDeclMode,
+        RegularMode,
+        InlineMode
+    };
+
+    using CodeBlockGenerator = std::function<std::string(GenMode)>;
 
     // Output Variables:
     std::set<std::string> NonTemplateTypes;
@@ -497,9 +120,7 @@ public:
         std::string LocalEnumName;
         std::string UnderlyingType;
     };
-    Opt<EnumDefinition> GetAsEnumDefinition(ASTPtr Node) {
-        // | |-EnumDecl 0x1388c5eb0 <line:8:5, line:13:5> line:8:16 class TheBlooper 'uint8_t':'unsigned char'
-        SCOPE_TIMER
+    std::optional<EnumDefinition> GetAsEnumDefinition(ASTPtr Node) {
         if (Node->Tag != TagType::EnumDecl) return std::nullopt;
         if (Node->Line.back() != '\'') return std::nullopt;
 
@@ -520,9 +141,7 @@ public:
     struct ClassDefinition {
         std::string LocalClassName;
     };
-    Opt<ClassDefinition> GetAsClassDefinition(ASTPtr Node) {
-        SCOPE_TIMER
-
+    std::optional<ClassDefinition> GetAsClassDefinition(ASTPtr Node) {
         if (Node->Tag == TagType::CXXRecordDecl && (Node->Line.find("implicit") == std::string::npos)) {
             
             std::smatch ClassMatch;
@@ -537,8 +156,7 @@ public:
     struct NamespaceDefinition {
         std::string LocalNamespaceName;
     };
-    Opt<NamespaceDefinition> GetAsNamespaceDefinition(ASTPtr Node) {
-        SCOPE_TIMER
+    std::optional<NamespaceDefinition> GetAsNamespaceDefinition(ASTPtr Node) {
         if (Node->Tag == TagType::NamespaceDecl) {
             // The namespace name is the last word in the line
             size_t i;
@@ -555,15 +173,7 @@ public:
     struct TemplateDefinition {
         Template T;
     };
-    Opt<TemplateDefinition> GetAsTemplateDefinition(ASTPtr Node, TemplatePtr ParentTemplate = nullptr) {
-        SCOPE_TIMER
-        //`-ClassTemplateDecl 0x1309055e0 <line:15:1, line:18:1> line:16:7 B3
-        //|-TemplateTemplateParmDecl 0x130905430 <line:15:10, col:63> col:63 depth 0 index 0 T2
-        //| |-TemplateTemplateParmDecl 0x130905338 <col:19, col:45> col:45 depth 1 index 0
-        //| | `-TemplateTypeParmDecl 0x130905268 <col:28, col:34> col:34 class depth 2 index 0 U
-        //| `-NonTypeTemplateParmDecl 0x1309053b0 <col:47, col:51> col:51 'int' depth 1 index 1 E
-        //|-TemplateTypeParmDecl 0x130905490 <col:67, col:76> col:76 typename depth 0 index 1 E2
-        
+    std::optional<TemplateDefinition> GetAsTemplateDefinition(ASTPtr Node, TemplatePtr ParentTemplate = nullptr) {
         if (
             Node->Tag == TagType::ClassTemplateDecl ||
             Node->Tag == TagType::TemplateTypeParmDecl ||
@@ -608,8 +218,7 @@ public:
         std::string TypeName;
         std::string VarName;
     };
-    Opt<FieldDefinition> GetAsField(ASTPtr Node) {
-        SCOPE_TIMER
+    std::optional<FieldDefinition> GetAsField(ASTPtr Node) {
         // Sample line:
         // 0x13c10cb60 <line:16:9, col:13> col:13 h 'int'
         if (Node->Tag != TagType::FieldDecl) {
@@ -626,13 +235,11 @@ public:
     }
 
     void GenerateTemplate(ASTPtr Node, int Indent, bool Generating) {
-        SCOPE_TIMER
         auto TemplateDef = GetAsTemplateDefinition(Node);
         if (!TemplateDef) {
             Errors.push_back("Internal error, could not find template definition");
             return;
         }
-        PrintTabbed(TemplateDef->T.Generate() + "\n", Indent);
 
         TemplateStack.push_back(TemplateDef->T);
         ASTPtr ClassNode = Node->Children.back();
@@ -643,13 +250,11 @@ public:
     }
 
     void GenerateClass(ASTPtr Node, int Indent, bool Generating) {
-        SCOPE_TIMER
         auto ClassDef = GetAsClassDefinition(Node);
         if (!ClassDef) {
             throw std::runtime_error("Could not find class definition");
         }
 
-        PrintTabbed("class " + ClassDef->LocalClassName + " {\n", Indent);
         NameStack.push_back(ClassDef->LocalClassName);
 
         Template Flattened = GetFlattenedTemplates();
@@ -661,9 +266,8 @@ public:
         for (size_t i = 0; i < Node->Children.size(); ++i) {
             auto Child = Node->Children[i];
             
-            if (Opt<FieldDefinition> FieldDef = GetAsField(Child)) {
+            if (std::optional<FieldDefinition> FieldDef = GetAsField(Child)) {
                 FieldDefinition FD = *FieldDef;
-                PrintTabbed(FD.TypeName + " " + FD.VarName + ";\n", Indent + 1);
 
                 std::string SerializeName = "Val." + FD.VarName;
                 if (EnumTypeMaps.find(FD.TypeName) != EnumTypeMaps.end()) {
@@ -685,7 +289,6 @@ public:
         GenerateScope(Node, Indent + 1, Generating);
 
         NameStack.pop_back();   
-        PrintTabbed("};\n", Indent);
 
         std::string const FullTypeName = FullyQualified + Flattened.GenerateNames();
         if (GeneratedBlocks.find(FullTypeName) != GeneratedBlocks.end()) {
@@ -703,12 +306,12 @@ public:
                 NonTemplateTypes.insert(FullyQualified);
             }
 
-            GeneratedBlocks[FullTypeName] = [Templates, FullTypeName, SerializeFieldsSource, DeserializeFieldsSource](bool IsForwardDecl) {
-                std::string const Qualifier = !Templates.empty() ? "inline " : "";
+            GeneratedBlocks[FullTypeName] = [Templates, FullTypeName, SerializeFieldsSource, DeserializeFieldsSource](GenMode Mode) {
+                std::string const Qualifier = (!Templates.empty() || Mode == InlineMode) ? "inline " : "";
 
                 std::string GeneratedSource;
 
-                if (IsForwardDecl) {
+                if (Mode == ForwardDeclMode) {
                     if (!Templates.empty()) GeneratedSource += Templates + "\n";
                     GeneratedSource += Qualifier + "void Serialize(Serializer& Ser, char const* Name, " + FullTypeName + " const& Val);\n";
                     GeneratedSource += Qualifier + "void Deserialize(Deserializer& Ser, char const* Name, " + FullTypeName + "& Val);\n";
@@ -746,8 +349,6 @@ public:
     }
 
     void GenerateScope(ASTPtr Node, int Indent, bool Generating) {
-        SCOPE_TIMER
-
         // Assert if tag isn't a scope
         if (Node->Tag != TagType::TranslationUnitDecl && Node->Tag != TagType::NamespaceDecl && Node->Tag != TagType::ClassTemplateDecl && Node->Tag != TagType::CXXRecordDecl) {
             throw std::runtime_error("Tag is not a scope, is " + std::to_string(static_cast<int>(Node->Tag)));
@@ -756,22 +357,20 @@ public:
         for (size_t i = 0; i < Node->Children.size(); ++i) {
             auto Child = Node->Children[i];
             
-            if (Opt<TemplateDefinition> TemplateDef = GetAsTemplateDefinition(Child)) {
+            if (std::optional<TemplateDefinition> TemplateDef = GetAsTemplateDefinition(Child)) {
                 GenerateTemplate(Child, Indent, Generating);
-            } else if (Opt<ClassDefinition> ClassDef = GetAsClassDefinition(Child)) {
+            } else if (std::optional<ClassDefinition> ClassDef = GetAsClassDefinition(Child)) {
                 if (Child->Line.find("implicit") != std::string::npos) {
                     continue;
                 }
                 GenerateClass(Child, Indent + 1, Generating);
-            } else if (Opt<NamespaceDefinition> NamespaceDef = GetAsNamespaceDefinition(Child)) {
-                PrintTabbed("namespace " + NamespaceDef->LocalNamespaceName + " {\n", Indent);
+            } else if (std::optional<NamespaceDefinition> NamespaceDef = GetAsNamespaceDefinition(Child)) {
                 if (NamespaceDef->LocalNamespaceName == "AutoReflect") ++NumAutoReflectNamespaces;
                 NameStack.push_back(NamespaceDef->LocalNamespaceName);
                 GenerateScope(Child, Indent + 1, Generating);
                 NameStack.pop_back();
                 if (NamespaceDef->LocalNamespaceName == "AutoReflect") --NumAutoReflectNamespaces;
-                PrintTabbed("}\n", Indent);
-            } else if (Opt<EnumDefinition> EnumDef = GetAsEnumDefinition(Child)) {
+            } else if (std::optional<EnumDefinition> EnumDef = GetAsEnumDefinition(Child)) {
                 // Get fully qualified version of enum name, may not always work
                 std::string FullyQualified;
                 for (std::string const& Name : NameStack) {
@@ -806,7 +405,7 @@ public:
     }
 };
 
-int GenerateSingleFile(NodeScanContext& Context, std::filesystem::path const& Path, std::vector<std::filesystem::path> const& IncludePaths, bool Silent) {
+int GenerateSingleFile(GeneratorContext& Context, std::filesystem::path const& Path, std::vector<std::filesystem::path> const& IncludePaths, bool Silent) {
     std::chrono::steady_clock::time_point ParseBegin = std::chrono::steady_clock::now();
 
     ASTPtr Root = LoadASTNodes(Path, IncludePaths, Silent);
@@ -893,69 +492,69 @@ std::filesystem::path GetGeneratedPath(std::filesystem::path const& Path) {
     return Path.parent_path() / Path.filename().replace_extension(".gen.inl");
 }
 
-int main(int argc, char** argv) {
-    std::vector<std::filesystem::path> IncludePaths; // TODO: Use this
+struct InputParams {
+    std::vector<std::filesystem::path> IncludePaths;
     std::vector<std::filesystem::path> FilesToParse;
     std::filesystem::path MainImpl, MainImplOutput;
-
     bool Silent = false;
 
-    for (int i = 1; i < argc; ++i) {
-        std::string Arg = argv[i];
-        if (Arg == "-S") {
-            Silent = true;
-        } else if (Arg == "-M") {
-            MainImpl = (argc > i + 1) ? argv[++i] : "";
-            MainImplOutput = MainImpl;
-            MainImplOutput += GeneratedSuffix;
-        } else if (Arg == "-I" && i + 1 < argc) {
-            IncludePaths.push_back(argv[++i]);
-        } else {
-            // Make sure the generated file is included, otherwise its pointless
-            bool FoundGenerated = false;
-            if (std::ifstream File = std::ifstream(Arg)) {
-                std::string Line;
-                while (std::getline(File, Line)) {
-                    if (Line.find("#include") != std::string::npos && Line.find(GeneratedSuffix) != std::string::npos) {
-                        FoundGenerated = true;
-                        break;
+    InputParams(int argc, char** argv) {
+        for (int i = 1; i < argc; ++i) {
+            std::string Arg = argv[i];
+            if (Arg == "-S") {
+                Silent = true;
+            } else if (Arg == "-M") {
+                MainImpl = (argc > i + 1) ? argv[++i] : "";
+                MainImplOutput = MainImpl;
+                MainImplOutput += GeneratedSuffix;
+            } else if (Arg == "-I" && i + 1 < argc) {
+                IncludePaths.push_back(argv[++i]);
+            } else {
+                // Make sure the generated file is included, otherwise its pointless
+                bool FoundGenerated = false;
+                if (std::ifstream File = std::ifstream(Arg)) {
+                    std::string Line;
+                    while (std::getline(File, Line)) {
+                        if (Line.find(GeneratedSuffix) != std::string::npos) {
+                            FoundGenerated = true;
+                            break;
+                        }
                     }
                 }
+                if (FoundGenerated) {
+                    FilesToParse.push_back(Arg);
+                }
             }
-            if (FoundGenerated) FilesToParse.push_back(Arg);
-            if (FoundGenerated) {
-                std::filesystem::path OutputPath = Arg;
-                OutputPath += GeneratedSuffix;
-            }
-            else std::filesystem::remove(GetGeneratedPath(Arg));
         }
     }
+};
 
-    if (MainImpl.empty()) {
-        std::cerr << "A main implementation file must be specified with -M" << std::endl;
-        return 1;
-    }
-
-    if (FilesToParse.empty()) {
-        FilesToParse.push_back("../Source/AutoReflectTest.cpp");
-        FilesToParse.push_back("../Source/AdditionalCpp.cpp");
-    }
+int main(int argc, char** argv) {
+    InputParams Params(argc, argv);
 
     std::set<std::string> AllNonTemplateTypes;
-    std::map<std::string, NodeScanContext::CodeBlockGenerator> AllGeneratedBlocks;
+    std::map<std::string, GeneratorContext::CodeBlockGenerator> AllGeneratedBlocks;
 
     std::mutex SharedContextMut;
 
-    //for (std::filesystem::path const& Path : FilesToParse) {
-    ParallelFor([Silent, IncludePaths, MainImplOutput, &AllNonTemplateTypes, &AllGeneratedBlocks, &SharedContextMut](std::filesystem::path const& Path) {
-        NodeScanContext Context;
+    // Does not generate a main file, just tries to place everything in inline functions
+    // Does not support SubclassOf reflection when using this mode
+    const bool InlineMode = Params.MainImpl.empty();
+
+    // TODO: Support this feature
+    if (InlineMode) {
+        std::cerr << "Inline mode is not supported yet, you need to specify a main file with -M" << std::endl;
+        return 1;
+    }
+
+    ParallelFor([&Params, &AllNonTemplateTypes, &AllGeneratedBlocks, &SharedContextMut, InlineMode](std::filesystem::path const& Path) {
+        GeneratorContext Context;
         int NumErrors = 0;
 
-        // Convert input name to ouput, ie Foo.cpp -> Foo.generated
         std::filesystem::path OutputPath = Path;
         OutputPath += GeneratedSuffix;
 
-        if (OutputPath == MainImplOutput) return;
+        if (OutputPath == Params.MainImplOutput) return;
 
         // Get write date of output file
         auto const OutputWriteTime = std::filesystem::exists(OutputPath) ? std::filesystem::last_write_time(OutputPath) : std::filesystem::file_time_type::min();
@@ -964,9 +563,9 @@ int main(int argc, char** argv) {
         bool AnyNewer = false;
         if (InputWriteTime > OutputWriteTime) {
             AnyNewer = true;
-            if (!Silent) Log(Path, "Input is newer than output");
+            if (!Params.Silent) Log(Path, "Input is newer than output");
         } else {
-            for (auto header : GetAllHeaders(Path, IncludePaths, Silent)) {
+            for (auto header : GetAllHeaders(Path, Params.IncludePaths, Params.Silent)) {
                 if (!std::filesystem::exists(header)) {
                     // Print in red
                     std::cerr << "\033[31m" << "Header " << header << " does not exist" << "\033[0m" << std::endl;
@@ -974,13 +573,13 @@ int main(int argc, char** argv) {
                 }
                 if (OutputPath != header && std::filesystem::last_write_time(header) > OutputWriteTime) {
                     AnyNewer = true;
-                    if (!Silent) Log(Path, "Header " + header + " is newer than output");
+                    if (!Params.Silent) Log(Path, "Header " + header + " is newer than output");
                     break;
                 }
             }
         }
 
-        if (!AnyNewer && !Silent) Log(Path, "No changes detected");
+        if (!AnyNewer && !Params.Silent) Log(Path, "No changes detected");
 
         if (AnyNewer) {
             std::filesystem::copy_file(
@@ -990,7 +589,7 @@ int main(int argc, char** argv) {
             );
         }
 
-        if (int Result = GenerateSingleFile(Context, Path, IncludePaths, Silent)) {
+        if (int Result = GenerateSingleFile(Context, Path, Params.IncludePaths, Params.Silent)) {
             std::cerr << "Failed to generate " << Path << std::endl;
             ++NumErrors;
             return;
@@ -1007,11 +606,11 @@ int main(int argc, char** argv) {
                 if (Context.NonTemplateTypes.find(kvp.first) == Context.NonTemplateTypes.end()) {
                     continue; // Skip templates
                 }
-                GeneratedFile << kvp.second(true) << std::endl;
+                GeneratedFile << kvp.second(InlineMode ? GeneratorContext::InlineMode : GeneratorContext::ForwardDeclMode) << std::endl;
             }
         }
 
-        {
+        if (!InlineMode) {
             std::lock_guard<std::mutex> Lock(SharedContextMut);
             // Merge all non-template types and generated blocks
             for (auto const& Type : Context.NonTemplateTypes) {
@@ -1027,7 +626,7 @@ int main(int argc, char** argv) {
             
             for (auto const& kvp : Context.GeneratedBlocks) {
                 auto found = AllGeneratedBlocks.find(kvp.first);
-                if (found != AllGeneratedBlocks.end() && found->second(false) != kvp.second(false)) {
+                if (found != AllGeneratedBlocks.end() && found->second(GeneratorContext::RegularMode) != kvp.second(GeneratorContext::RegularMode)) {
                     std::cerr << "Type " << kvp.first << " has different generated code" << std::endl;
                     ++NumErrors;
                     continue;
@@ -1036,41 +635,42 @@ int main(int argc, char** argv) {
                 AllGeneratedBlocks[kvp.first] = kvp.second;
             }
         }
-    }, FilesToParse);
-    //}
+    }, Params.FilesToParse);
 
-    std::filesystem::path AllIncludesOutput = MainImpl;
-    {
-        AllIncludesOutput += ".gen.hpp";
-        std::ofstream AllIncludesFile = std::ofstream(AllIncludesOutput, std::ios::ate);
-        AllIncludesFile << "#pragma once" << std::endl << std::endl;
-        for (std::filesystem::path const& ToParse : FilesToParse) {
-            std::filesystem:: path OutputPath = ToParse;
-            OutputPath += GeneratedSuffix;
-            if (OutputPath == MainImplOutput) continue;
+    if (!InlineMode) {
+        std::filesystem::path AllIncludesOutput = Params.MainImpl;
+        {
+            AllIncludesOutput += ".gen.hpp";
+            std::ofstream AllIncludesFile = std::ofstream(AllIncludesOutput, std::ios::ate);
+            AllIncludesFile << "#pragma once" << std::endl << std::endl;
+            for (std::filesystem::path const& ToParse : Params.FilesToParse) {
+                std::filesystem:: path OutputPath = ToParse;
+                OutputPath += GeneratedSuffix;
+                if (OutputPath == Params.MainImplOutput) continue;
 
-            // Get relative to main impl
-            OutputPath = std::filesystem::relative(OutputPath, std::filesystem::path(AllIncludesOutput).parent_path());
+                // Get relative to main impl
+                OutputPath = std::filesystem::relative(OutputPath, std::filesystem::path(AllIncludesOutput).parent_path());
 
-            AllIncludesFile << "#include \"" << OutputPath.string() << "\"" << std::endl;
+                AllIncludesFile << "#include \"" << OutputPath.string() << "\"" << std::endl;
+            }
         }
-    }
 
-    std::ofstream MainImplFile = std::ofstream(MainImplOutput, std::ios::ate);
-    
-    MainImplFile << "// Forward declarations" << std::endl;
-    MainImplFile << "#include \"" << AllIncludesOutput.filename().string() << "\"" << std::endl << std::endl;
+        std::ofstream MainImplFile = std::ofstream(Params.MainImplOutput, std::ios::ate);
+        
+        MainImplFile << "// Forward declarations" << std::endl;
+        MainImplFile << "#include \"" << AllIncludesOutput.filename().string() << "\"" << std::endl << std::endl;
 
-    MainImplFile << "// Base implementations" << std::endl;
-    MainImplFile << std::ifstream(std::filesystem::path(AR_RESOURCES_DIR) / "BaseImpls.txt").rdbuf() << std::endl << std::endl;
+        MainImplFile << "// Base implementations" << std::endl;
+        MainImplFile << std::ifstream(std::filesystem::path(AR_RESOURCES_DIR) / "BaseImpls.txt").rdbuf() << std::endl << std::endl;
 
-    MainImplFile << "// std::any implementations" << std::endl;
-    MainImplFile << GenDynamicReflectionImpl(AllNonTemplateTypes) << std::endl;
+        MainImplFile << "// std::any implementations" << std::endl;
+        MainImplFile << GenDynamicReflectionImpl(AllNonTemplateTypes) << std::endl;
 
-    MainImplFile << "// Type implementations" << std::endl;
-    for (auto const& kvp : AllGeneratedBlocks) {
-        MainImplFile << "// " << kvp.first << std::endl;
-        MainImplFile << kvp.second(false) << std::endl;
+        MainImplFile << "// Type implementations" << std::endl;
+        for (auto const& kvp : AllGeneratedBlocks) {
+            MainImplFile << "// " << kvp.first << std::endl;
+            MainImplFile << kvp.second(GeneratorContext::RegularMode) << std::endl;
+        }
     }
     
     return 0;
