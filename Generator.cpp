@@ -307,35 +307,34 @@ public:
             }
 
             GeneratedBlocks[FullTypeName] = [Templates, FullTypeName, SerializeFieldsSource, DeserializeFieldsSource](GenMode Mode) {
-                std::string const Qualifier = (!Templates.empty() || Mode == InlineMode) ? "inline " : "";
+                std::string Qualifier = (!Templates.empty() || Mode == InlineMode) ? "inline " : "";
+
+                if (!Templates.empty()) {
+                    Qualifier += Templates + "\n";
+                }
 
                 std::string GeneratedSource;
 
                 if (Mode == ForwardDeclMode) {
-                    if (!Templates.empty()) GeneratedSource += Templates + "\n";
                     GeneratedSource += Qualifier + "void Serialize(Serializer& Ser, char const* Name, " + FullTypeName + " const& Val);\n";
                     GeneratedSource += Qualifier + "void Deserialize(Deserializer& Ser, char const* Name, " + FullTypeName + "& Val);\n";
                     GeneratedSource += Qualifier + "void SerializeFields(Serializer& Ser, " + FullTypeName + " const& Val);\n";
                     GeneratedSource += Qualifier + "void DeserializeFields(Deserializer& Ser, " + FullTypeName + "& Val);\n";
                 } else {
-                    if (!Templates.empty()) GeneratedSource += Templates + "\n";
                     GeneratedSource += Qualifier + "void SerializeFields(Serializer& Ser, " + FullTypeName + " const& Val) {\n";
                     GeneratedSource += SerializeFieldsSource;
                     GeneratedSource += "}\n\n";
 
-                    if (!Templates.empty()) GeneratedSource += Templates + "\n";
                     GeneratedSource += Qualifier + "void DeserializeFields(Deserializer& Ser, " + FullTypeName + "& Val) {\n";
                     GeneratedSource += DeserializeFieldsSource;
                     GeneratedSource += "}\n\n";
 
-                    if (!Templates.empty()) GeneratedSource += Templates + "\n";
                     GeneratedSource += Qualifier + "void Serialize(Serializer& Ser, char const* Name, " + FullTypeName + " const& Val) {\n";
                     GeneratedSource += "    Ser.BeginObject(Name);\n";
                     GeneratedSource += "    SerializeFields(Ser, Val);\n";
                     GeneratedSource += "    Ser.EndObject();\n";
                     GeneratedSource += "}\n\n";
 
-                    if (!Templates.empty()) GeneratedSource += Templates + "\n";
                     GeneratedSource += Qualifier + "void Deserialize(Deserializer& Ser, char const* Name, " + FullTypeName + "& Val) {\n";
                     GeneratedSource += "    Ser.BeginObject(Name);\n";
                     GeneratedSource += "    DeserializeFields(Ser, Val);\n";
@@ -608,6 +607,16 @@ int main(int argc, char** argv) {
                 }
                 GeneratedFile << kvp.second(InlineMode ? GeneratorContext::InlineMode : GeneratorContext::ForwardDeclMode) << std::endl;
             }
+
+            // Then template impls only
+            for (auto const& kvp : Context.GeneratedBlocks) {
+                if (Context.NonTemplateTypes.find(kvp.first) != Context.NonTemplateTypes.end()) {
+                    continue; // Skip non-templates
+                }
+                GeneratedFile << kvp.second(GeneratorContext::RegularMode) << std::endl;
+            }
+
+            GeneratedFile << std::ifstream(std::filesystem::path(AR_RESOURCES_DIR) / "BaseTemplateImpls.txt").rdbuf() << std::endl << std::endl;
         }
 
         if (!InlineMode) {
@@ -662,6 +671,7 @@ int main(int argc, char** argv) {
 
         MainImplFile << "// Base implementations" << std::endl;
         MainImplFile << std::ifstream(std::filesystem::path(AR_RESOURCES_DIR) / "BaseImpls.txt").rdbuf() << std::endl << std::endl;
+        MainImplFile << std::ifstream(std::filesystem::path(AR_RESOURCES_DIR) / "BaseTemplateImpls.txt").rdbuf() << std::endl << std::endl;
 
         MainImplFile << "// std::any implementations" << std::endl;
         MainImplFile << GenDynamicReflectionImpl(AllNonTemplateTypes) << std::endl;

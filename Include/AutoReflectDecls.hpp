@@ -16,7 +16,7 @@ public:
 public:
     std::any const& GetAny() const { return Value; }
     
-    void Reset() {
+    inline void Reset() {
         Value = nullptr;
         BaseFunc = nullptr;
     }
@@ -187,75 +187,19 @@ void DeserializeFields(Deserializer& Ser, glm::uvec3& Value);
 void DeserializeFields(Deserializer& Ser, glm::uvec4& Value);
 
 template<typename T>
-inline void SerializeFields(Serializer& Ser, std::vector<T> const& Value) {
-    auto& Scope = Ser.GetCurrentScope();
-    Scope = nlohmann::json::array();
-
-    for (auto const& Item : Value) {
-        Scope.push_back(nlohmann::json());
-        Ser.Scopes.push_back(&Scope.back());
-        SerializeFields(Ser, Item);
-        Ser.Scopes.pop_back();
-    }
-}
+inline void SerializeFields(Serializer& Ser, std::vector<T> const& Value);
+template<typename T>
+inline void Serialize(Serializer& Ser, char const* Name, std::vector<T> const& Value);
+template<typename T>
+inline void DeserializeFields(Deserializer& Ser, std::vector<T>& Value);
+template<typename T>
+inline void Deserialize(Deserializer& Ser, char const* Name, std::vector<T>& Value);
 
 template<typename T>
-inline void Serialize(Serializer& Ser, char const* Name, std::vector<T> const& Value) {
-    Ser.BeginObject(Name);
-    SerializeFields(Ser, Value);
-    Ser.EndObject();
-}
-
+inline void SerializeFields(Serializer& Ser, std::optional<T> const& Value);
 template<typename T>
-inline void DeserializeFields(Deserializer& Ser, std::vector<T>& Value) {
-    auto& Scope = Ser.GetCurrentScope();
-
-    for (auto& Item : Scope) {
-        Value.push_back(T());
-        Ser.Scopes.push_back(&Item);
-        DeserializeFields(Ser, Value.back());
-        Ser.Scopes.pop_back();
-    }
-}
-
+inline void Serialize(Serializer& Ser, char const* Name, std::optional<T> const& Value);
 template<typename T>
-inline void Deserialize(Deserializer& Ser, char const* Name, std::vector<T>& Value) {
-    Ser.BeginObject(Name);
-    DeserializeFields(Ser, Value);
-    Ser.EndObject();
-}
-
+inline void DeserializeFields(Deserializer& Ser, std::optional<T>& Value);
 template<typename T>
-inline void SerializeFields(Serializer& Ser, std::optional<T> const& Value) {
-    if (Value.has_value()) {
-        SerializeFields(Ser, Value.value());
-    } else {
-        Ser.GetCurrentScope() = nullptr;
-    }
-}
-
-template<typename T>
-inline void Serialize(Serializer& Ser, char const* Name, std::optional<T> const& Value) {
-    Ser.BeginObject(Name);
-    SerializeFields(Ser, Value);
-    Ser.EndObject();
-}
-
-template<typename T>
-inline void DeserializeFields(Deserializer& Ser, std::optional<T>& Value) {
-    auto& Scope = Ser.GetCurrentScope();
-
-    if (Scope.is_null()) {
-        Value = std::nullopt;
-    } else {
-        Value = T();
-        DeserializeFields(Ser, Value.value());
-    }
-}
-
-template<typename T>
-inline void Deserialize(Deserializer& Ser, char const* Name, std::optional<T>& Value) {
-    Ser.BeginObject(Name);
-    DeserializeFields(Ser, Value);
-    Ser.EndObject();
-}
+inline void Deserialize(Deserializer& Ser, char const* Name, std::optional<T>& Value);
