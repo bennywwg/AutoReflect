@@ -42,7 +42,7 @@ std::vector<std::string> GetAllHeaders(std::filesystem::path const& Path, std::v
         GetHeadersCommand += " -I\"" + Include.string() + "\"";
     }
     
-    ClangASTCommand += " " + Path.string()
+    GetHeadersCommand += " " + Path.string()
     + " 2>NUL\"";
 #else
     = "clang -std=c++20 -M";
@@ -148,7 +148,7 @@ TagType BeginsWithValidTag(char const* Line, size_t LineSize, uint32_t& End) {
     return TagType::INVALID;
 }
 
-ASTPtr LoadASTNodes(std::string const& ASTFile, std::vector<std::filesystem::path> const& Includes, bool Silent) {
+ASTPtr LoadASTNodes(std::filesystem::path const& ASTFile, std::vector<std::filesystem::path> const& Includes, bool Silent) {
     const ASTPtr Root = std::make_shared<ASTNode>();
     Root->Indent = 0;
     ASTPtr CurrentScope = Root;
@@ -188,7 +188,7 @@ ASTPtr LoadASTNodes(std::string const& ASTFile, std::vector<std::filesystem::pat
     return Root->Children[0];
 }
 
-void ClangASTLinesPiped(std::string ParsePath, std::vector<std::filesystem::path> const& Includes, std::function<void(const char*, size_t)> const& Func, bool Silent) {
+void ClangASTLinesPiped(std::filesystem::path const& ParsePath, std::vector<std::filesystem::path> const& Includes, std::function<void(const char*, size_t)> const& Func, bool Silent) {
     std::string ClangASTCommand
 #ifdef _WIN32
     = "cmd /c \"clang -std=c++20 -Xclang -ast-dump -fsyntax-only -fno-color-diagnostics -I"
@@ -198,7 +198,7 @@ void ClangASTLinesPiped(std::string ParsePath, std::vector<std::filesystem::path
         ClangASTCommand += " -I\"" + Include.string() + "\"";
     }
     
-    ClangASTCommand += " " + ParsePath
+    ClangASTCommand += " " + ParsePath.string()
     + " 2>NUL\"";
 #else
     = "clang -std=c++20 -Xclang -ast-dump -fsyntax-only -fno-color-diagnostics -I"
@@ -208,7 +208,7 @@ void ClangASTLinesPiped(std::string ParsePath, std::vector<std::filesystem::path
         ClangASTCommand += " -I\"" + Include.string() + "\"";
     }
 
-    ClangASTCommand += " " + ParsePath
+    ClangASTCommand += " " + ParsePath.string()
     + " 2>/dev/null";
 #endif
 

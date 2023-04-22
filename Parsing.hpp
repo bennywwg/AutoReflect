@@ -45,6 +45,6 @@ bool StartsWith(uint32_t& OutSize, char const* Line, size_t LineSize, char const
 
 TagType BeginsWithValidTag(char const* Line, size_t LineSize, uint32_t& End);
 
-ASTPtr LoadASTNodes(std::string const& ASTFile, std::vector<std::filesystem::path> const& Includes, bool Silent);
+ASTPtr LoadASTNodes(std::filesystem::path const& ASTFile, std::vector<std::filesystem::path> const& Includes, bool Silent);
 
-void ClangASTLinesPiped(std::string ParsePath, std::vector<std::filesystem::path> const& Includes, std::function<void(const char*, size_t)> const& Func, bool Silent);
+void ClangASTLinesPiped(std::filesystem::path const& ParsePath, std::vector<std::filesystem::path> const& Includes, std::function<void(const char*, size_t)> const& Func, bool Silent);
