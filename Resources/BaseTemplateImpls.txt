@@ -1,3 +1,6 @@
+#ifndef BASE_TEMPLATE_IMPLS
+#define BASE_TEMPLATE_IMPLS
+
 template<typename T>
 inline void SerializeFields(Serializer& Ser, std::vector<T> const& Value) {
     auto& Scope = Ser.GetCurrentScope();
@@ -71,3 +74,5 @@ inline void Deserialize(Deserializer& Ser, char const* Name, std::optional<T>& V
     DeserializeFields(Ser, Value);
     Ser.EndObject();
 }
+
+#endif // BASE_TEMPLATE_IMPLS

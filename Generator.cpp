@@ -321,6 +321,16 @@ public:
                     GeneratedSource += Qualifier + "void SerializeFields(Serializer& Ser, " + FullTypeName + " const& Val);\n";
                     GeneratedSource += Qualifier + "void DeserializeFields(Deserializer& Ser, " + FullTypeName + "& Val);\n";
                 } else {
+                    // Convert to a macro to avoid multiple definitions, replace :,<,>,, with _
+                    std::string MacroName = FullTypeName;
+                    std::replace(MacroName.begin(), MacroName.end(), ':', '_');
+                    std::replace(MacroName.begin(), MacroName.end(), '<', '_');
+                    std::replace(MacroName.begin(), MacroName.end(), '>', '_');
+                    std::replace(MacroName.begin(), MacroName.end(), ',', '_');
+
+                    GeneratedSource += "#ifndef " + MacroName + "_IMPL\n";
+                    GeneratedSource += "#define " + MacroName + "_IMPL\n\n";
+
                     GeneratedSource += Qualifier + "void SerializeFields(Serializer& Ser, " + FullTypeName + " const& Val) {\n";
                     GeneratedSource += SerializeFieldsSource;
                     GeneratedSource += "}\n\n";
@@ -340,6 +350,8 @@ public:
                     GeneratedSource += "    DeserializeFields(Ser, Val);\n";
                     GeneratedSource += "    Ser.EndObject();\n";
                     GeneratedSource += "}\n\n";
+
+                    GeneratedSource += "#endif // " + MacroName + "\n";
                 }
 
                 return GeneratedSource;
