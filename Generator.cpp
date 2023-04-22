@@ -310,7 +310,7 @@ public:
                 std::string Qualifier = (!Templates.empty() || Mode == InlineMode) ? "inline " : "";
 
                 if (!Templates.empty()) {
-                    Qualifier += Templates + "\n";
+                    Qualifier = Templates + "\n" + Qualifier;
                 }
 
                 std::string GeneratedSource;
@@ -647,30 +647,20 @@ int main(int argc, char** argv) {
     }, Params.FilesToParse);
 
     if (!InlineMode) {
-        std::filesystem::path AllIncludesOutput = Params.MainImpl;
-        {
-            AllIncludesOutput += ".gen.hpp";
-            std::ofstream AllIncludesFile = std::ofstream(AllIncludesOutput, std::ios::ate);
-            AllIncludesFile << "#pragma once" << std::endl << std::endl;
-            for (std::filesystem::path const& ToParse : Params.FilesToParse) {
-                std::filesystem:: path OutputPath = ToParse;
-                OutputPath += GeneratedSuffix;
-                if (OutputPath == Params.MainImplOutput) continue;
-
-                // Get relative to main impl
-                OutputPath = std::filesystem::relative(OutputPath, std::filesystem::path(AllIncludesOutput).parent_path());
-
-                AllIncludesFile << "#include \"" << OutputPath.string() << "\"" << std::endl;
-            }
-        }
-
         std::ofstream MainImplFile = std::ofstream(Params.MainImplOutput, std::ios::ate);
         
-        MainImplFile << "// Forward declarations" << std::endl;
-        MainImplFile << "#include \"" << AllIncludesOutput.filename().string() << "\"" << std::endl << std::endl;
+        MainImplFile << "// Base forward declarations" << std::endl;
+        MainImplFile << "#include <AutoReflectDecls.hpp>" << std::endl << std::endl;
+
+        MainImplFile << "// Type forward declarations" << std::endl;
+        for (auto const& kvp : AllGeneratedBlocks) {
+            MainImplFile << "// " << kvp.first << std::endl;
+            MainImplFile << kvp.second(GeneratorContext::ForwardDeclMode) << std::endl;
+        }
 
         MainImplFile << "// Base implementations" << std::endl;
         MainImplFile << std::ifstream(std::filesystem::path(AR_RESOURCES_DIR) / "BaseImpls.txt").rdbuf() << std::endl << std::endl;
+        MainImplFile << "// Base template implementations" << std::endl;
         MainImplFile << std::ifstream(std::filesystem::path(AR_RESOURCES_DIR) / "BaseTemplateImpls.txt").rdbuf() << std::endl << std::endl;
 
         MainImplFile << "// std::any implementations" << std::endl;
