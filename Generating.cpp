@@ -3,6 +3,14 @@
 #include <fstream>
 #include <sstream>
 
+std::string PathToString(std::filesystem::path const& Path) {
+    std::string Str = Path.string();
+    for (auto& C : Str) {
+        if (C == '/') C = '_';
+    }
+    return Str;
+}
+
 bool ImplementationGenerator::operator==(ImplementationGenerator const& Other) const {
     return
         Templates == Other.Templates &&
@@ -143,7 +151,7 @@ std::string ImplementationGeneratorSet::GenDynamicReflectionImpl() const {
     return GeneratedFile.str();
 }
 
-void SaveCachedGenerator(std::string const& Filepath, ImplementationGeneratorSet const& Generator) {
+void SaveCachedGenerator(std::string const& FilePath, ImplementationGeneratorSet const& Generator) {
     nlohmann::json J;
 
     nlohmann::json& GeneratorsJSON = J["Generators"];
@@ -156,14 +164,14 @@ void SaveCachedGenerator(std::string const& Filepath, ImplementationGeneratorSet
 
     J["NonTemplateTypes"] = Generator.NonTemplateTypes;
 
-    std::filesystem::create_directory(".AutoSerialize");
+    std::filesystem::create_directory(".AutoReflect");
 
-    std::ofstream Serialized(std::filesystem::path(".AutoSerialize") / Filepath, std::ios::ate);
-    Serialized << J.dump();
+    std::ofstream Serialized(std::filesystem::path(".AutoReflect") / PathToString(FilePath), std::ios::ate);
+    Serialized << J.dump(4);
 }
 
 std::optional<ImplementationGeneratorSet> GetCachedGenerator(std::filesystem::path const& FilePath) {
-    const std::filesystem::path CachedPath = std::filesystem::path(".AutoSerialize") / FilePath;
+    const std::filesystem::path CachedPath = std::filesystem::path(".AutoReflect") / PathToString(FilePath);
 
     if (!std::filesystem::exists(CachedPath))
         return std::nullopt;
