@@ -1,6 +1,7 @@
 #include "Utilities.hpp"
 
 #include <iostream>
+#include <fstream>
 
 void Log(std::filesystem::path const& Task, std::string const& Str) {
     static std::mutex Mutex;
@@ -9,9 +10,5 @@ void Log(std::filesystem::path const& Task, std::string const& Str) {
     std::cout << Task << ": " << Str << std::endl;
 }
 
-CallOnDtor::CallOnDtor(std::function<void()> Func)
-: Func(Func)
-{}
-CallOnDtor::~CallOnDtor() {
-    Func();
-}
+CallOnDtor::CallOnDtor(std::function<void()> Func) : Func(Func) { }
+CallOnDtor::~CallOnDtor() { Func(); }

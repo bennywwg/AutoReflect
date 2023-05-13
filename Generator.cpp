@@ -17,59 +17,12 @@
 #include <thread>
 
 #include "Parsing.hpp"
+#include "Generating.hpp"
 
 #define GeneratedSuffix ".gen.inl"
 
 const std::regex ClassRegex("class ([a-zA-Z0-9_]+) definition");
 const std::regex FieldRegex("([a-zA-Z0-9_]+) '([a-zA-Z0-9_:<>, \\*\\&\\[\\]]+)'");
-
-struct Template;
-struct KindOrType {
-    std::string KindOrTypeName;
-    std::string Name;
-};
-
-using TemplatePtr = std::shared_ptr<Template>;
-using TemplateParam = std::variant<KindOrType, TemplatePtr>;
-
-struct Template {
-    std::vector<TemplateParam> Params;
-    std::string Name;
-
-    std::string Generate(bool IsOuter = true) const {
-        if (Params.empty()) return "";
-        std::string Result = "template<";
-        for (auto const& Param : Params) {
-            if (std::holds_alternative<KindOrType>(Param)) {
-                KindOrType Info = std::get<KindOrType>(Param);
-                Result += Info.KindOrTypeName + (Info.Name.empty() ? "" : " ") + Info.Name + ", ";
-            } else {
-                auto const& Template = std::get<TemplatePtr>(Param);
-                Result += Template->Generate(false) + ", ";
-            }
-        }
-        Result.erase(Result.size() - 2);
-        Result += ">" + std::string(IsOuter ? std::string() : (std::string(" typename") + (Name.empty() ? "" : " ") + Name));
-
-        return Result;
-    }
-
-    std::string GenerateNames() const {
-        if (Params.empty()) return "";
-        std::string Result = "<";
-        for (auto const& Param : Params) {
-            if (std::holds_alternative<KindOrType>(Param)) {
-                Result += std::get<KindOrType>(Param).Name;
-            } else {
-                Result += std::get<TemplatePtr>(Param)->Name;
-            }
-            Result += ", ";
-        }
-        Result.erase(Result.size() - 2);
-        Result += ">";
-        return Result;
-    }
-};
 
 class GeneratorContext {
 private:
@@ -79,17 +32,8 @@ private:
     std::map<std::string, std::string> EnumTypeMaps;
     int NumAutoReflectNamespaces = 0;
 public:
-    enum GenMode {
-        ForwardDeclMode,
-        RegularMode,
-        InlineMode
-    };
-
-    using CodeBlockGenerator = std::function<std::string(GenMode)>;
-
     // Output Variables:
-    std::set<std::string> NonTemplateTypes;
-    std::map<std::string, CodeBlockGenerator> GeneratedBlocks;
+    ImplementationGeneratorSet Generators;
 
     std::string GetFullyQualifiedName() const {
         if (TemplateStack.empty() && NameStack.empty()) return "";
@@ -234,21 +178,6 @@ public:
         }
     }
 
-    void GenerateTemplate(ASTPtr Node, int Indent, bool Generating) {
-        auto TemplateDef = GetAsTemplateDefinition(Node);
-        if (!TemplateDef) {
-            Errors.push_back("Internal error, could not find template definition");
-            return;
-        }
-
-        TemplateStack.push_back(TemplateDef->T);
-        ASTPtr ClassNode = Node->Children.back();
-        if (GetAsClassDefinition(ClassNode)) {
-            GenerateClass(ClassNode, Indent, Generating);
-        }
-        TemplateStack.pop_back();
-    }
-
     void GenerateClass(ASTPtr Node, int Indent, bool Generating) {
         auto ClassDef = GetAsClassDefinition(Node);
         if (!ClassDef) {
@@ -291,7 +220,7 @@ public:
         NameStack.pop_back();   
 
         std::string const FullTypeName = FullyQualified + Flattened.GenerateNames();
-        if (GeneratedBlocks.find(FullTypeName) != GeneratedBlocks.end()) {
+        if (Generators.Generators.find(FullTypeName) != Generators.Generators.end()) {
             return;
         }
 
@@ -303,59 +232,10 @@ public:
         if ((NumAutoReflectNamespaces > 0 || FoundAutoReflect) && Generating) {
             if (TemplateStack.empty()) // Dynamic types are not supported for templates
             {
-                NonTemplateTypes.insert(FullyQualified);
+                Generators.NonTemplateTypes.insert(FullyQualified);
             }
 
-            GeneratedBlocks[FullTypeName] = [Templates, FullTypeName, SerializeFieldsSource, DeserializeFieldsSource](GenMode Mode) {
-                std::string Qualifier = (!Templates.empty() || Mode == InlineMode) ? "inline " : "";
-
-                if (!Templates.empty()) {
-                    Qualifier = Templates + "\n" + Qualifier;
-                }
-
-                std::string GeneratedSource;
-
-                if (Mode == ForwardDeclMode) {
-                    GeneratedSource += Qualifier + "void Serialize(Serializer& Ser, char const* Name, " + FullTypeName + " const& Val);\n";
-                    GeneratedSource += Qualifier + "void Deserialize(Deserializer& Ser, char const* Name, " + FullTypeName + "& Val);\n";
-                    GeneratedSource += Qualifier + "void SerializeFields(Serializer& Ser, " + FullTypeName + " const& Val);\n";
-                    GeneratedSource += Qualifier + "void DeserializeFields(Deserializer& Ser, " + FullTypeName + "& Val);\n";
-                } else {
-                    // Convert to a macro to avoid multiple definitions, replace :,<,>,, with _
-                    std::string MacroName = FullTypeName;
-                    std::replace(MacroName.begin(), MacroName.end(), ':', '_');
-                    std::replace(MacroName.begin(), MacroName.end(), '<', '_');
-                    std::replace(MacroName.begin(), MacroName.end(), '>', '_');
-                    std::replace(MacroName.begin(), MacroName.end(), ',', '_');
-
-                    GeneratedSource += "#ifndef " + MacroName + "_IMPL\n";
-                    GeneratedSource += "#define " + MacroName + "_IMPL\n\n";
-
-                    GeneratedSource += Qualifier + "void SerializeFields(Serializer& Ser, " + FullTypeName + " const& Val) {\n";
-                    GeneratedSource += SerializeFieldsSource;
-                    GeneratedSource += "}\n\n";
-
-                    GeneratedSource += Qualifier + "void DeserializeFields(Deserializer& Ser, " + FullTypeName + "& Val) {\n";
-                    GeneratedSource += DeserializeFieldsSource;
-                    GeneratedSource += "}\n\n";
-
-                    GeneratedSource += Qualifier + "void Serialize(Serializer& Ser, char const* Name, " + FullTypeName + " const& Val) {\n";
-                    GeneratedSource += "    Ser.BeginObject(Name);\n";
-                    GeneratedSource += "    SerializeFields(Ser, Val);\n";
-                    GeneratedSource += "    Ser.EndObject();\n";
-                    GeneratedSource += "}\n\n";
-
-                    GeneratedSource += Qualifier + "void Deserialize(Deserializer& Ser, char const* Name, " + FullTypeName + "& Val) {\n";
-                    GeneratedSource += "    Ser.BeginObject(Name);\n";
-                    GeneratedSource += "    DeserializeFields(Ser, Val);\n";
-                    GeneratedSource += "    Ser.EndObject();\n";
-                    GeneratedSource += "}\n\n";
-
-                    GeneratedSource += "#endif // " + MacroName + "\n";
-                }
-
-                return GeneratedSource;
-            };
+            Generators.Generators[FullTypeName] = ImplementationGenerator { Templates, FullTypeName, SerializeFieldsSource, DeserializeFieldsSource };
         }
     }
 
@@ -369,7 +249,12 @@ public:
             auto Child = Node->Children[i];
             
             if (std::optional<TemplateDefinition> TemplateDef = GetAsTemplateDefinition(Child)) {
-                GenerateTemplate(Child, Indent, Generating);
+                TemplateStack.push_back(TemplateDef->T);
+                ASTPtr ClassNode = Node->Children.back();
+                if (GetAsClassDefinition(ClassNode)) {
+                    GenerateClass(ClassNode, Indent, Generating);
+                }
+                TemplateStack.pop_back();
             } else if (std::optional<ClassDefinition> ClassDef = GetAsClassDefinition(Child)) {
                 if (Child->Line.find("implicit") != std::string::npos) {
                     continue;
@@ -393,7 +278,7 @@ public:
         }
     }
 
-    int GenerateFile(ASTPtr Root) {
+    GeneratorContext(std::filesystem::path const& Path, std::vector<std::filesystem::path> const& IncludePaths, bool Silent) {
         CallOnDtor OnDtor([&]() {
             TemplateStack.clear();
             NameStack.clear();
@@ -401,107 +286,20 @@ public:
             NumAutoReflectNamespaces = 0;
         });
 
-        if (!Root) {
-            std::cerr << "Failed to load AST nodes (internal error)" << std::endl;
-            return 1;
-        }
+        ASTPtr Root = LoadASTNodes(Path, IncludePaths, Silent);
 
-        GenerateScope(Root, 0, true);
+        try {
+            GenerateScope(Root, 0, true);
+        } catch (std::runtime_error const& Er) {
+            std::cerr << "Failed during generation (internal error): " << Er.what() << std::endl;
+            return;
+        }
 
         for (std::string const& Error : Errors) {
             std::cerr << Error << std::endl;
         }
-
-        return 0;
     }
 };
-
-int GenerateSingleFile(GeneratorContext& Context, std::filesystem::path const& Path, std::vector<std::filesystem::path> const& IncludePaths, bool Silent) {
-    std::chrono::steady_clock::time_point ParseBegin = std::chrono::steady_clock::now();
-
-    ASTPtr Root = LoadASTNodes(Path, IncludePaths, Silent);
-
-    CallOnDtor OnDtor([Root]() {
-        // Why does this crash?
-        //DeleteNode(Root);
-    });
-
-    std::chrono::steady_clock::time_point ParseEnd = std::chrono::steady_clock::now();
-    if (!Silent) Log(Path, "Parsed in " + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(ParseEnd - ParseBegin).count()) + "ms");
-    
-    std::chrono::steady_clock::time_point Begin = std::chrono::steady_clock::now();
-    
-    try {
-        Context.GenerateFile(Root);
-    } catch (std::runtime_error const& Er) {
-        std::cerr << "Failed during generation (internal error): " << Er.what() << std::endl;
-        return 1;
-    }
-
-    std::chrono::steady_clock::time_point End = std::chrono::steady_clock::now();
-    if (!Silent) Log(Path, "Generated in " + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(End - Begin).count()) + "ms");
-
-    return 0;
-}
-
-// TODO: Use an acceleration structure instead of just if statements
-std::string GenDynamicReflectionImpl(std::set<std::string> const& NonTemplateTypes) {
-    std::stringstream GeneratedFile;
-
-    GeneratedFile << "void DeserializeFields(Deserializer& Ser, SubclassOfBase& Val) {" << std::endl;
-    GeneratedFile << "    if (Ser.GetCurrentScope() == nullptr) {" << std::endl;
-    GeneratedFile << "        Val.Reset();" << std::endl;
-    GeneratedFile << "        return;" << std::endl;
-    GeneratedFile << "    }" << std::endl;
-    GeneratedFile << "    std::string const Type = Ser.AtChecked(\"Type\");" << std::endl;
-    for (std::string const& TypeName : NonTemplateTypes) {
-        GeneratedFile << "    if (Type == \"" << TypeName << "\") {" << std::endl;
-        GeneratedFile << "        Ser.BeginObject(\"Value\");" << std::endl;
-        GeneratedFile << "        " << TypeName << " Temp;" << std::endl;
-        GeneratedFile << "        DeserializeFields(Ser, Temp);" << std::endl;
-        GeneratedFile << "        Val = SubclassOf<" << TypeName << ">(Temp);" << std::endl;
-        GeneratedFile << "        Ser.EndObject();" << std::endl;
-        GeneratedFile << "        return;" << std::endl;
-        GeneratedFile << "    }" << std::endl;
-    }
-    GeneratedFile << "    throw std::runtime_error(\"Unknown type \" + Type);" << std::endl;
-    GeneratedFile << "}" << std::endl << std::endl;
-    
-    GeneratedFile << "void Deserialize(Deserializer& Ser, char const* Name, SubclassOfBase& Val) {" << std::endl;
-    GeneratedFile << "    Ser.BeginObject(Name);" << std::endl;
-    GeneratedFile << "    DeserializeFields(Ser, Val);" << std::endl;
-    GeneratedFile << "    Ser.EndObject();" << std::endl;
-    GeneratedFile << "}" << std::endl << std::endl;
-
-    GeneratedFile << "void SerializeFields(Serializer& Ser, SubclassOfBase const& Val) {" << std::endl;
-    GeneratedFile << "    if (!Val.GetAny().has_value()) {" << std::endl;
-    GeneratedFile << "        Ser.GetCurrentScope() = nullptr;" << std::endl;
-    GeneratedFile << "        return;" << std::endl;
-    GeneratedFile << "    }" << std::endl;
-    for (std::string const& TypeName : NonTemplateTypes) {
-        GeneratedFile << "    if (Val.GetAny().type() == typeid(" << TypeName << ")) {" << std::endl;
-        GeneratedFile << "        Ser.AtChecked(\"Type\") = \"" << TypeName << "\";" << std::endl;
-        GeneratedFile << "        Ser.BeginObject(\"Value\");" << std::endl;
-        GeneratedFile << "        SerializeFields(Ser, std::any_cast<" << TypeName << ">(Val.GetAny()));" << std::endl;
-        GeneratedFile << "        Ser.EndObject();" << std::endl;
-        GeneratedFile << "        return;" << std::endl;
-        GeneratedFile << "    }" << std::endl;
-    }
-    GeneratedFile << "    throw std::runtime_error(\"Unsupported type \" + std::string(Val.GetAny().type().name()));" << std::endl;
-    GeneratedFile << "}" << std::endl << std::endl;
-    
-    GeneratedFile << "void Serialize(Serializer& Ser, char const* Name, SubclassOfBase const& Val) {" << std::endl;
-    GeneratedFile << "    Ser.BeginObject(Name);" << std::endl;
-    GeneratedFile << "    SerializeFields(Ser, Val);" << std::endl;
-    GeneratedFile << "    Ser.EndObject();" << std::endl;
-    GeneratedFile << "}" << std::endl << std::endl;
-
-    return GeneratedFile.str();
-}
-
-std::filesystem::path GetGeneratedPath(std::filesystem::path const& Path) {
-    return Path.parent_path() / Path.filename().replace_extension(".gen.inl");
-}
 
 struct InputParams {
     std::vector<std::filesystem::path> IncludePaths;
@@ -543,8 +341,7 @@ struct InputParams {
 int main(int argc, char** argv) {
     InputParams Params(argc, argv);
 
-    std::set<std::string> AllNonTemplateTypes;
-    std::map<std::string, GeneratorContext::CodeBlockGenerator> AllGeneratedBlocks;
+    ImplementationGeneratorSet GlobalGenerators;
 
     std::mutex SharedContextMut;
 
@@ -558,8 +355,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    ParallelFor([&Params, &AllNonTemplateTypes, &AllGeneratedBlocks, &SharedContextMut, InlineMode](std::filesystem::path const& Path) {
-        GeneratorContext Context;
+    ParallelFor([&Params, &GlobalGenerators, &SharedContextMut, InlineMode](std::filesystem::path const& Path) {
         int NumErrors = 0;
 
         std::filesystem::path OutputPath = Path;
@@ -600,10 +396,15 @@ int main(int argc, char** argv) {
             );
         }
 
-        if (int Result = GenerateSingleFile(Context, Path, Params.IncludePaths, Params.Silent)) {
-            std::cerr << "Failed to generate " << Path << std::endl;
-            ++NumErrors;
-            return;
+        // If nothing newer, try to load the cached generator
+        std::optional<ImplementationGeneratorSet> Generators = AnyNewer ? std::nullopt : GetCachedGenerator(Path);
+
+        if (!Generators) {
+            GeneratorContext Context(Path, Params.IncludePaths, Params.Silent);
+
+            Generators = Context.Generators;
+
+            SaveCachedGenerator(Path, *Generators);
         }
 
         if (AnyNewer) {
@@ -613,19 +414,19 @@ int main(int argc, char** argv) {
             GeneratedFile << "#include <AutoReflectDecls.hpp>" << std::endl << std::endl;
 
             // First, do all forward decls in the header
-            for (auto const& kvp : Context.GeneratedBlocks) {
-                if (Context.NonTemplateTypes.find(kvp.first) == Context.NonTemplateTypes.end()) {
+            for (auto const& kvp : Generators->Generators) {
+                if (Generators->NonTemplateTypes.find(kvp.first) == Generators->NonTemplateTypes.end()) {
                     continue; // Skip templates
                 }
-                GeneratedFile << kvp.second(InlineMode ? GeneratorContext::InlineMode : GeneratorContext::ForwardDeclMode) << std::endl;
+                GeneratedFile << kvp.second.Generate(InlineMode ? GenMode::InlineMode : GenMode::ForwardDeclMode) << std::endl;
             }
 
             // Then template impls only
-            for (auto const& kvp : Context.GeneratedBlocks) {
-                if (Context.NonTemplateTypes.find(kvp.first) != Context.NonTemplateTypes.end()) {
+            for (auto const& kvp : Generators->Generators) {
+                if (Generators->NonTemplateTypes.find(kvp.first) != Generators->NonTemplateTypes.end()) {
                     continue; // Skip non-templates
                 }
-                GeneratedFile << kvp.second(GeneratorContext::RegularMode) << std::endl;
+                GeneratedFile << kvp.second.Generate(GenMode::RegularMode) << std::endl;
             }
 
             GeneratedFile << std::ifstream(std::filesystem::path(AR_RESOURCES_DIR) / "BaseTemplateImpls.txt").rdbuf() << std::endl << std::endl;
@@ -633,28 +434,9 @@ int main(int argc, char** argv) {
 
         if (!InlineMode) {
             std::lock_guard<std::mutex> Lock(SharedContextMut);
-            // Merge all non-template types and generated blocks
-            for (auto const& Type : Context.NonTemplateTypes) {
-                auto found = AllNonTemplateTypes.find(Type);
-                if (found != AllNonTemplateTypes.end() && *found != Type) {
-                    std::cerr << "Type " << Type << " is already defined as " << *found << std::endl;
-                    ++NumErrors;
-                    continue;
-                }
-                
-                AllNonTemplateTypes.insert(Type);
-            }
-            
-            for (auto const& kvp : Context.GeneratedBlocks) {
-                auto found = AllGeneratedBlocks.find(kvp.first);
-                if (found != AllGeneratedBlocks.end() && found->second(GeneratorContext::RegularMode) != kvp.second(GeneratorContext::RegularMode)) {
-                    std::cerr << "Type " << kvp.first << " has different generated code" << std::endl;
-                    ++NumErrors;
-                    continue;
-                }
 
-                AllGeneratedBlocks[kvp.first] = kvp.second;
-            }
+            // TODO: Handle errors vector returned from this operation
+            GlobalGenerators.Combine(*Generators);
         }
     }, Params.FilesToParse);
 
@@ -665,9 +447,9 @@ int main(int argc, char** argv) {
         MainImplFile << "#include <AutoReflectDecls.hpp>" << std::endl << std::endl;
 
         MainImplFile << "// Type forward declarations" << std::endl;
-        for (auto const& kvp : AllGeneratedBlocks) {
+        for (auto const& kvp : GlobalGenerators.Generators) {
             MainImplFile << "// " << kvp.first << std::endl;
-            MainImplFile << kvp.second(GeneratorContext::ForwardDeclMode) << std::endl;
+            MainImplFile << kvp.second.Generate(GenMode::ForwardDeclMode) << std::endl;
         }
 
         MainImplFile << "// Base implementations" << std::endl;
@@ -676,12 +458,12 @@ int main(int argc, char** argv) {
         MainImplFile << std::ifstream(std::filesystem::path(AR_RESOURCES_DIR) / "BaseTemplateImpls.txt").rdbuf() << std::endl << std::endl;
 
         MainImplFile << "// std::any implementations" << std::endl;
-        MainImplFile << GenDynamicReflectionImpl(AllNonTemplateTypes) << std::endl;
+        MainImplFile << GlobalGenerators.GenDynamicReflectionImpl() << std::endl;
 
         MainImplFile << "// Type implementations" << std::endl;
-        for (auto const& kvp : AllGeneratedBlocks) {
+        for (auto const& kvp : GlobalGenerators.Generators) {
             MainImplFile << "// " << kvp.first << std::endl;
-            MainImplFile << kvp.second(GeneratorContext::RegularMode) << std::endl;
+            MainImplFile << kvp.second.Generate(GenMode::RegularMode) << std::endl;
         }
     }
     

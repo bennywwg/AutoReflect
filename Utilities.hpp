@@ -4,6 +4,9 @@
 #include <vector>
 #include <thread>
 #include <filesystem>
+#include <optional>
+#include <set>
+#include <nlohmann/json.hpp>
 
 #ifndef _WIN32 
 #define POPEN popen
@@ -13,7 +16,11 @@
 #define PCLOSE _pclose
 #endif
 
-
+enum class GenMode : int {
+    ForwardDeclMode,
+    RegularMode,
+    InlineMode
+};
 
 void Log(std::filesystem::path const& Task, std::string const& Str);
 
