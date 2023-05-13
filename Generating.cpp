@@ -151,7 +151,7 @@ std::string ImplementationGeneratorSet::GenDynamicReflectionImpl() const {
     return GeneratedFile.str();
 }
 
-void SaveCachedGenerator(std::string const& FilePath, ImplementationGeneratorSet const& Generator) {
+void SaveCachedGenerator(std::filesystem::path const& FilePath, ImplementationGeneratorSet const& Generator) {
     nlohmann::json J;
 
     nlohmann::json& GeneratorsJSON = J["Generators"];

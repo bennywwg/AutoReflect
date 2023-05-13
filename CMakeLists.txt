@@ -9,7 +9,7 @@ set(CMAKE_CXX_FLAGS "-O3")
 set(RESOURCES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Resources")
 set(AR_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Include")
 
-add_executable(AutoReflect Generator.cpp Utilities.cpp Parsing.cpp Generating.cpp)
+add_executable(AutoReflect Generator.cpp Utilities.cpp Parsing.cpp Generating.cpp Utilities.hpp Parsing.hpp Generating.hpp)
 
 target_include_directories(AutoReflect PUBLIC ${PROJECT_SOURCE_DIR}/Source/)
 target_include_directories(AutoReflect PUBLIC ${PROJECT_SOURCE_DIR}/glm/)

@@ -28,7 +28,7 @@ struct ImplementationGeneratorSet {
     std::string GenDynamicReflectionImpl() const;
 };
 
-void SaveCachedGenerator(std::string const& Filepath, ImplementationGeneratorSet const& Generator);
+void SaveCachedGenerator(std::filesystem::path const& Filepath, ImplementationGeneratorSet const& Generator);
 std::optional<ImplementationGeneratorSet> GetCachedGenerator(std::filesystem::path const& FilePath);
 
 struct KindOrType {
