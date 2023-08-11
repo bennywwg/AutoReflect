@@ -2,6 +2,18 @@
 #define BASE_TEMPLATE_IMPLS
 
 template<typename T>
+requires (std::is_same_v<T, uint8_t>)
+inline void SerializeFields(Serializer& Ser, std::vector<T> const& Value) {
+    auto& Scope = Ser.GetCurrentScope();
+    Scope["Begin"] = Ser.Binary.size();
+    Scope["Size"] = Value.size();
+
+    Ser.Binary.resize(Ser.Binary.size() + Value.size());
+    memcpy(Ser.Binary.data() + Ser.Binary.size(), Value.data(), Value.size());
+}
+
+template<typename T>
+requires (!std::is_same_v<T, uint8_t>)
 inline void SerializeFields(Serializer& Ser, std::vector<T> const& Value) {
     auto& Scope = Ser.GetCurrentScope();
     Scope = nlohmann::json::array();
@@ -22,6 +34,17 @@ inline void Serialize(Serializer& Ser, char const* Name, std::vector<T> const& V
 }
 
 template<typename T>
+requires (std::is_same_v<T, uint8_t>)
+inline void DeserializeFields(Deserializer& Ser, std::vector<T>& Value) {
+    auto& Scope = Ser.GetCurrentScope();
+
+    Value.resize(Scope["Size"].get<size_t>());
+
+    memcpy(Value.data(), Ser.Binary.data() + Scope["Begin"].get<size_t>(), Value.size());
+}
+
+template<typename T>
+requires (!std::is_same_v<T, uint8_t>)
 inline void DeserializeFields(Deserializer& Ser, std::vector<T>& Value) {
     auto& Scope = Ser.GetCurrentScope();
 
