@@ -9,7 +9,7 @@ inline void SerializeFields(Serializer& Ser, std::vector<T> const& Value) {
     Scope["Size"] = Value.size();
 
     Ser.Binary.resize(Ser.Binary.size() + Value.size());
-    memcpy(Ser.Binary.data() + Ser.Binary.size(), Value.data(), Value.size());
+    memcpy(Ser.Binary.data() + (Ser.Binary.size() - Value.size()), Value.data(), Value.size());
 }
 
 template<typename T>

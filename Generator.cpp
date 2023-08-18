@@ -354,8 +354,10 @@ int main(int argc, char** argv) {
         std::cerr << "Inline mode is not supported yet, you need to specify a main file with -M" << std::endl;
         return 1;
     }
+    
+    std::atomic_bool GlobalAnyNewer = false;
 
-    ParallelFor([&Params, &GlobalGenerators, &SharedContextMut, InlineMode](std::filesystem::path const& Path) {
+    ParallelFor([&Params, &GlobalGenerators, &SharedContextMut, InlineMode, &GlobalAnyNewer](std::filesystem::path const& Path) {
         int NumErrors = 0;
 
         std::filesystem::path OutputPath = Path;
@@ -375,7 +377,7 @@ int main(int argc, char** argv) {
             for (auto header : GetAllHeaders(Path, Params.IncludePaths, Params.Silent)) {
                 if (!std::filesystem::exists(header)) {
                     // Print in red
-                    std::cerr << "\033[31m" << "Header " << header << " does not exist" << "\033[0m" << std::endl;
+                    //std::cerr << "\033[31m" << "Header " << header << " does not exist" << "\033[0m" << std::endl;
                     continue;
                 }
                 if (OutputPath != header && std::filesystem::last_write_time(header) > OutputWriteTime) {
@@ -384,6 +386,10 @@ int main(int argc, char** argv) {
                     break;
                 }
             }
+        }
+
+        if (AnyNewer) {
+            GlobalAnyNewer = true;
         }
 
         if (!AnyNewer && !Params.Silent) Log(Path, "No changes detected");
@@ -440,7 +446,7 @@ int main(int argc, char** argv) {
         }
     }, Params.FilesToParse);
 
-    if (!InlineMode) {
+    if (!InlineMode && GlobalAnyNewer) {
         std::ofstream MainImplFile = std::ofstream(Params.MainImplOutput, std::ios::ate);
         
         MainImplFile << "// Base forward declarations" << std::endl;
